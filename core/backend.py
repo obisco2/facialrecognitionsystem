@@ -1,0 +1,738 @@
+import os
+import cv2
+import time
+import logging
+import threading
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from datetime import datetime
+
+from core.config import Config
+from core.database import DatabaseManager
+from core.face_detector import FaceDetector
+from core.face_encoder import FaceEncoder
+from core.recognizer import Recognizer
+from bias.evaluator import BiasEvaluator
+from bias.datasets import DatasetHelper
+
+logger = logging.getLogger(__name__)
+
+config = Config()
+config.ensure_dirs()
+db = DatabaseManager(config.db_path)
+
+app = FastAPI(title="AttendIQ API")
+
+# Enable CORS for development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global camera state for video streaming
+class CameraStreamer:
+    def __init__(self):
+        self.camera = None
+        self.active_mode = None  # "attendance", "enrollment", "test"
+        self.running = False
+        self.frame = None
+        self.recognizer = None
+        self.session_class_id = None
+        self.session_date = None
+        self.marked_ids = set()
+        self.marked_names = []  # List of dicts: {"time": ts, "name": name, "conf": conf}
+        self.unknown_count = 0
+        self.lecturer_id = None
+        
+        # Enrollment specific
+        self.enrollment_user_id = None
+        self.enrollment_full_name = None
+        self.staged_photos = []
+        self.latest_raw_frame = None
+        
+        # Frame-skip for performance
+        self._frame_count = 0
+        self._last_locations = []
+        self._last_names = []
+        self._last_distances = []
+
+    def start(self, mode: str, class_id: int = None, lecturer_id: int = None, user_id: int = None, full_name: str = None, camera_source: str = None):
+        if self.running:
+            self.stop()
+            time.sleep(0.2)
+
+        self.active_mode = mode
+        self.running = True
+        self.session_class_id = class_id
+        self.lecturer_id = lecturer_id
+        self.session_date = datetime.now().strftime("%Y-%m-%d")
+        self.marked_ids = set()
+        self.marked_names = []
+        self.unknown_count = 0
+        self.enrollment_user_id = user_id
+        self.enrollment_full_name = full_name
+        self.staged_photos = []
+        self.latest_raw_frame = None
+        self._frame_count = 0
+        self._last_locations = []
+        self._last_names = []
+        self._last_distances = []
+
+        if camera_source:
+            try:
+                source = int(camera_source)
+            except ValueError:
+                source = camera_source
+        else:
+            source = config.stream_url if config.stream_url else config.camera_index
+
+        if mode in ("attendance", "test"):
+            det = FaceDetector(model="haar")
+            enc = FaceEncoder(engine=config.recognition_engine, tolerance=config.tolerance)
+            
+            if mode == "test" and user_id:
+                # Load only staged photos in temp dir
+                temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+                person_temp_dir = os.path.join(temp_dir, full_name)
+                # Build temporary directory if not exist
+                os.makedirs(person_temp_dir, exist_ok=True)
+                enc.load_known_faces(temp_dir)
+            else:
+                # Load all known faces
+                enc.load_known_faces(config.known_faces_dir)
+
+            self.recognizer = Recognizer(det, enc)
+            opened = self.recognizer.start_camera(source)
+            if not opened:
+                self.running = False
+                raise RuntimeError("Failed to open camera")
+        else:
+            # Enrollment capture
+            self.camera = cv2.VideoCapture(source)
+            if not self.camera.isOpened():
+                self.running = False
+                raise RuntimeError("Failed to open camera")
+
+        # Start thread
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        if self.recognizer:
+            self.recognizer.stop_camera()
+            self.recognizer = None
+        if self.camera:
+            self.camera.release()
+            self.camera = None
+        self.active_mode = None
+
+    def _loop(self):
+        scale = config.frame_scale
+        # Only run expensive face recognition every N frames for performance
+        RECOGNITION_INTERVAL = 3
+        while self.running:
+            if self.active_mode in ("attendance", "test") and self.recognizer:
+                ret, frame = self.recognizer.read_frame()
+                if not ret or frame is None:
+                    time.sleep(0.02)
+                    continue
+
+                self.latest_raw_frame = frame.copy()
+                self._frame_count += 1
+
+                # Only run face detection+encoding every Nth frame
+                if self._frame_count % RECOGNITION_INTERVAL == 0:
+                    locations, names, distances = self.recognizer.process_frame(frame, scale)
+                    self._last_locations = locations
+                    self._last_names = names
+                    self._last_distances = distances
+                else:
+                    # Reuse last detection results for skipped frames
+                    locations = self._last_locations
+                    names = self._last_names
+                    distances = self._last_distances
+
+                # process_frame already returns original-size coordinates
+                for (top, right, bottom, left), name, dist in zip(locations, names, distances):
+                    is_known = (name != "Unknown")
+                    colour = (0, 200, 100) if is_known else (0, 60, 200)
+
+                    cv2.rectangle(frame, (left, top), (right, bottom), colour, 2)
+                    cv2.rectangle(frame, (left, bottom - 26), (right, bottom), colour, cv2.FILLED)
+
+                    conf_str = f"{dist:.2f}" if dist is not None else "?"
+                    label = f"{name}  {conf_str}" if is_known else "Unknown"
+                    cv2.putText(frame, label, (left + 5, bottom - 8),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
+
+                    # Mark attendance in BOTH attendance and test modes
+                    if is_known and name not in self.marked_ids:
+                        if self.active_mode == "attendance" and self.session_class_id:
+                            student = db.get_user_by_name(name)
+                            if student and student["id"] not in self.marked_ids:
+                                logged = db.log_attendance(
+                                    student["id"],
+                                    self.session_class_id,
+                                    session_date=self.session_date,
+                                    method="face",
+                                    confidence=dist,
+                                    marked_by=self.lecturer_id
+                                )
+                                if logged:
+                                    self.marked_ids.add(student["id"])
+                                    ts = datetime.now().strftime("%H:%M:%S")
+                                    self.marked_names.append({
+                                        "time": ts,
+                                        "name": name,
+                                        "conf": f"{dist:.2f}" if dist else "—"
+                                    })
+                        elif self.active_mode == "test":
+                            # In test mode, add to marked so frontend polling can detect recognition
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            self.marked_names.append({
+                                "time": ts,
+                                "name": name,
+                                "conf": f"{dist:.2f}" if dist else "—"
+                            })
+                            self.marked_ids.add(name)
+
+                self.frame = frame
+
+            elif self.active_mode == "enrollment" and self.camera:
+                ret, frame = self.camera.read()
+                if not ret or frame is None:
+                    time.sleep(0.02)
+                    continue
+                self.latest_raw_frame = frame.copy()
+                self.frame = frame
+            else:
+                time.sleep(0.1)
+            time.sleep(0.03)
+
+    def get_jpeg(self):
+        if self.frame is None:
+            import numpy as np
+            blank = np.zeros((480, 640, 3), dtype=np.uint8)
+            _, jpeg = cv2.imencode('.jpg', blank)
+            return jpeg.tobytes()
+        _, jpeg = cv2.imencode('.jpg', self.frame)
+        return jpeg.tobytes()
+
+streamer = CameraStreamer()
+
+# --- Request / Response Models ---
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+    full_name: str
+    student_id: Optional[str] = None
+    email: Optional[str] = None
+    department: Optional[str] = None
+    level: Optional[str] = None
+
+class UserUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    student_id: Optional[str] = None
+    email: Optional[str] = None
+    face_enrolled: Optional[int] = None
+
+class ClassCreateRequest(BaseModel):
+    name: str
+    code: str
+    schedule: Optional[str] = None
+    room: Optional[str] = None
+
+class ManualAttendanceRequest(BaseModel):
+    student_id: int
+    class_id: int
+    marked_by: int
+
+class ConfigSaveRequest(BaseModel):
+    camera_index: int
+    frame_scale: float
+    tolerance: float
+    recognition_engine: str
+    stream_url: str
+
+# --- Endpoints ---
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    user = db.authenticate(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return user
+
+@app.get("/api/users")
+def get_users(role: Optional[str] = None):
+    return db.get_users(role)
+
+@app.post("/api/users")
+def create_user(req: UserCreateRequest):
+    try:
+        user_id = db.create_user(
+            username=req.username,
+            password=req.password,
+            role=req.role,
+            full_name=req.full_name,
+            student_id=req.student_id,
+            email=req.email,
+            department=req.department,
+            level=req.level
+        )
+        return {"id": user_id, "username": req.username, "role": req.role}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int, req: UserUpdateRequest):
+    ok = db.update_user(user_id, **req.model_dump(exclude_none=True))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Update failed")
+    return {"status": "ok"}
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int):
+    # If student, delete their face model folder if exists
+    user = db.get_user(user_id)
+    if user and user["role"] == "student":
+        person_dir = os.path.join(config.known_faces_dir, user["full_name"])
+        import shutil
+        if os.path.exists(person_dir):
+            shutil.rmtree(person_dir)
+    db.delete_user(user_id)
+    return {"status": "ok"}
+
+@app.get("/api/classes")
+def get_classes(lecturer_id: Optional[int] = None):
+    return db.get_classes(lecturer_id)
+
+@app.post("/api/classes")
+def create_class(req: ClassCreateRequest, lecturer_id: int):
+    class_id = db.create_class(
+        name=req.name,
+        code=req.code,
+        lecturer_id=lecturer_id,
+        schedule=req.schedule,
+        room=req.room
+    )
+    return {"id": class_id}
+
+@app.put("/api/classes/{class_id}")
+def update_class(class_id: int, req: ClassCreateRequest):
+    ok = db.update_class(class_id, **req.model_dump(exclude_none=True))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Update failed")
+    return {"status": "ok"}
+
+@app.delete("/api/classes/{class_id}")
+def delete_class(class_id: int):
+    db.delete_class(class_id)
+    return {"status": "ok"}
+
+@app.get("/api/classes/{class_id}/enrollments")
+def get_class_enrollments(class_id: int):
+    # Returns lists of enrolled and unenrolled students
+    all_students = db.get_users("student")
+    enrolled_students = db.get_enrolled_students(class_id)
+    enrolled_ids = {s["id"] for s in enrolled_students}
+    
+    unenrolled_students = [s for s in all_students if s["id"] not in enrolled_ids]
+    return {
+        "enrolled": enrolled_students,
+        "unenrolled": unenrolled_students
+    }
+
+@app.post("/api/classes/{class_id}/enrollments")
+def enroll_student(class_id: int, student_id: int):
+    db.enroll_student(student_id, class_id)
+    return {"status": "ok"}
+
+@app.delete("/api/classes/{class_id}/enrollments/{student_id}")
+def unenroll_student(class_id: int, student_id: int):
+    db.unenroll_student(student_id, class_id)
+    return {"status": "ok"}
+
+@app.get("/api/attendance/history")
+def get_attendance_history(class_id: int, date: str):
+    rows = db.get_attendance(class_id, date)
+    return rows
+
+@app.get("/api/attendance/history-range")
+def get_attendance_history_range(class_id: int, date_from: str, date_to: str):
+    rows = db.get_attendance_range(class_id, date_from, date_to)
+    return rows
+
+@app.delete("/api/attendance/history/{record_id}")
+def delete_attendance_record(record_id: int):
+    with db._conn:
+        db._conn.execute("DELETE FROM attendance_log WHERE id = ?", (record_id,))
+    return {"status": "ok"}
+
+@app.post("/api/attendance/manual")
+def log_manual_attendance(req: ManualAttendanceRequest):
+    session_date = datetime.now().strftime("%Y-%m-%d")
+    logged = db.log_attendance(
+        req.student_id,
+        req.class_id,
+        session_date=session_date,
+        method="manual",
+        marked_by=req.marked_by
+    )
+    if not logged:
+        raise HTTPException(status_code=400, detail="Student already logged today")
+    return {"status": "ok"}
+
+# --- Camera Streaming & Live Session Endpoints ---
+
+@app.post("/api/session/start")
+def start_session(class_id: int, lecturer_id: int, camera_source: Optional[str] = None):
+    try:
+        streamer.start("attendance", class_id=class_id, lecturer_id=lecturer_id, camera_source=camera_source)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/session/stop")
+def stop_session():
+    streamer.stop()
+    return {"status": "ok"}
+
+@app.get("/api/session/live")
+def get_live_session():
+    return {
+        "running": streamer.running,
+        "mode": streamer.active_mode,
+        "marked": streamer.marked_names,
+        "unknown": streamer.unknown_count,
+        "date": streamer.session_date
+    }
+
+def gen_frames():
+    while streamer.running:
+        frame = streamer.get_jpeg()
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        time.sleep(0.04)
+
+@app.get("/api/session/video_feed")
+def video_feed():
+    return StreamingResponse(gen_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+# --- Face Enrollment Endpoints ---
+
+@app.post("/api/enrollment/start")
+def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] = None):
+    try:
+        streamer.start("enrollment", user_id=user_id, full_name=full_name, camera_source=camera_source)
+        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+        os.makedirs(temp_dir, exist_ok=True)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/enrollment/upload")
+async def upload_enrollment(user_id: int, files: list[UploadFile] = File(...)):
+    try:
+        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+        import shutil
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        saved_paths = []
+        for i, file in enumerate(files[:5]):
+            target_path = os.path.join(temp_dir, f"capture_{i}.jpg")
+            content = await file.read()
+            with open(target_path, "wb") as f:
+                f.write(content)
+            saved_paths.append(f"/data/known_faces/__temp_{user_id}__/capture_{i}.jpg")
+            
+        return {"status": "ok", "count": len(saved_paths), "files": saved_paths}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/enrollment/capture")
+def capture_enrollment(user_id: int, full_name: str, slot_idx: int):
+    if streamer.latest_raw_frame is None:
+        raise HTTPException(status_code=400, detail="Camera feed not ready")
+    
+    temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    filepath = os.path.join(temp_dir, f"capture_{slot_idx}.jpg")
+    cv2.imwrite(filepath, streamer.latest_raw_frame)
+    web_path = f"/data/known_faces/__temp_{user_id}__/capture_{slot_idx}.jpg"
+    return {"status": "ok", "filepath": web_path}
+
+@app.delete("/api/enrollment/slot")
+def delete_enrollment_slot(user_id: int, slot_idx: int):
+    temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+    filepath = os.path.join(temp_dir, f"capture_{slot_idx}.jpg")
+    if os.path.exists(filepath):
+        os.remove(filepath)
+    return {"status": "ok"}
+
+@app.post("/api/enrollment/validate")
+def validate_enrollment(user_id: int):
+    temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+    
+    detector = FaceDetector(model="haar")
+    encoder = FaceEncoder(engine=config.recognition_engine)
+
+    results = []
+    valid_count = 0
+
+    for i in range(5):
+        path = os.path.join(temp_dir, f"capture_{i}.jpg")
+        if not os.path.exists(path):
+            results.append({"slot": i, "state": "empty", "message": "No photo"})
+            continue
+
+        img = cv2.imread(path)
+        if img is None:
+            results.append({"slot": i, "state": "invalid", "message": "Cannot read file"})
+            continue
+
+        # Resize and check face
+        small = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
+        locs = detector.detect_faces(small)
+        if not locs:
+            results.append({"slot": i, "state": "invalid", "message": "No face detected"})
+            continue
+
+        t, r, b, l = locs[0]
+        face_h = (b - t) * 2
+        face_w = (r - l) * 2
+        if face_h < 50 or face_w < 50:
+            results.append({"slot": i, "state": "invalid", "message": "Face too small"})
+            continue
+
+        blur = encoder.blur_score(img)
+        if blur < 80.0:
+            results.append({"slot": i, "state": "warn", "message": f"Blurry (score {blur:.0f})"})
+            valid_count += 1
+        else:
+            results.append({"slot": i, "state": "valid", "message": "✓ Face detected"})
+            valid_count += 1
+
+    return {"results": results, "valid_count": valid_count, "can_proceed": valid_count >= 3}
+
+@app.post("/api/enrollment/test/start")
+def start_enrollment_test(user_id: int, full_name: str):
+    try:
+        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+        person_dir = os.path.join(temp_dir, full_name)
+        os.makedirs(person_dir, exist_ok=True)
+        
+        for file in os.listdir(temp_dir):
+            if file.startswith("capture_") and file.lower().endswith(".jpg"):
+                import shutil
+                shutil.move(os.path.join(temp_dir, file), os.path.join(person_dir, file))
+
+        streamer.start("test", user_id=user_id, full_name=full_name)
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/enrollment/confirm")
+def confirm_enrollment(user_id: int, full_name: str):
+    streamer.stop()
+    
+    temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+    person_temp_dir = os.path.join(temp_dir, full_name)
+    final_dir = os.path.join(config.known_faces_dir, full_name)
+    
+    import shutil
+    if os.path.exists(final_dir):
+        shutil.rmtree(final_dir)
+    os.makedirs(final_dir, exist_ok=True)
+    
+    if os.path.exists(person_temp_dir):
+        for f in os.listdir(person_temp_dir):
+            shutil.copy2(os.path.join(person_temp_dir, f), os.path.join(final_dir, f))
+            
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+
+    db.set_face_enrolled(user_id, True)
+    
+    # Extract 128-D face encoding vector and save in students table
+    try:
+        det = FaceDetector(model="haar")
+        enc = FaceEncoder(engine=config.recognition_engine)
+        enc.load_known_faces(config.known_faces_dir)
+        if full_name in enc.known_names:
+            idx = enc.known_names.index(full_name)
+            vector = enc.known_encodings[idx]
+            db.save_student_face_encoding(user_id, vector)
+    except Exception as e:
+        logger.error("Failed to pickle and save face encoding to students table: %s", str(e))
+
+    return {"status": "ok"}
+
+# --- Config & System Endpoints ---
+
+@app.get("/api/config")
+def get_config():
+    return {
+        "camera_index": config.camera_index,
+        "frame_scale": config.frame_scale,
+        "tolerance": config.tolerance,
+        "recognition_engine": config.recognition_engine,
+        "stream_url": config.stream_url
+    }
+
+@app.post("/api/config")
+def save_config(req: ConfigSaveRequest):
+    config.set("Camera", "CAMERA_INDEX", str(req.camera_index))
+    config.set("Camera", "FRAME_SCALE", str(req.frame_scale))
+    config.set("Recognition", "TOLERANCE", str(req.tolerance))
+    config.set("Recognition", "ENGINE", req.recognition_engine)
+    config.set("Camera", "STREAM_URL", req.stream_url)
+    return {"status": "ok"}
+
+@app.post("/api/bias/evaluate")
+def run_bias_evaluation(background_tasks: BackgroundTasks):
+    dataset_dir = os.path.join(config.base_dir, "data", "evaluation_dataset")
+    annotations = os.path.join(dataset_dir, "annotations.csv")
+    
+    if not os.path.exists(annotations):
+        raise HTTPException(status_code=400, detail="Annotations file missing. Please create evaluations structure first.")
+
+    def _eval_job():
+        det = FaceDetector(model="haar")
+        enc = FaceEncoder(engine=config.recognition_engine, tolerance=config.tolerance)
+        recognizer = Recognizer(det, enc)
+        recognizer.load_database(config.known_faces_dir)
+        evaluator = BiasEvaluator(recognizer)
+        
+        metrics = evaluator.evaluate(dataset_dir, annotations)
+        if metrics:
+            evaluator.save_results(os.path.join(dataset_dir, "results.csv"))
+            evaluator.save_metrics(os.path.join(dataset_dir, "metrics.json"))
+            
+    background_tasks.add_task(_eval_job)
+    return {"status": "started"}
+
+@app.get("/api/bias/results")
+def get_bias_results():
+    dataset_dir = os.path.join(config.base_dir, "data", "evaluation_dataset")
+    metrics_path = os.path.join(dataset_dir, "metrics.json")
+    
+    if not os.path.exists(metrics_path):
+        helper = DatasetHelper(dataset_dir)
+        helper.create_sample_dataset()
+        helper.generate_annotations_template(os.path.join(dataset_dir, "annotations.csv"))
+        return {"status": "no_metrics", "msg": "No evaluation run yet. Sample structure generated."}
+        
+    import json
+    with open(metrics_path, "r") as f:
+        return json.load(f)
+
+@app.get("/api/student/attendance/{student_name}")
+def get_student_attendance(student_name: str):
+    student = db.get_user_by_name(student_name)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+        
+    rows = db._conn.execute(
+        """SELECT a.*, c.name AS class_name, c.code AS class_code 
+           FROM attendance_log a
+           JOIN classes c ON a.class_id = c.id
+           WHERE a.student_id = ?
+           ORDER BY a.session_date DESC, a.timestamp DESC""",
+        (student["id"],)
+    ).fetchall()
+    return db._rows_to_list(rows)
+
+@app.get("/api/attendance/export")
+def export_attendance(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv"):
+    import pandas as pd
+    class_data = db.get_class(class_id)
+    class_name = class_data["name"] if class_data else f"class_{class_id}"
+
+    if date_from and date_to:
+        rows = db.get_attendance_range(class_id, date_from, date_to)
+        range_label = f"{date_from}_to_{date_to}"
+    else:
+        rows = db.get_attendance(class_id, date)
+        range_label = date
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=["student_id", "full_name", "session_date", "timestamp", "method", "confidence"])
+    else:
+        df = df[["student_id", "full_name", "session_date", "timestamp", "method", "confidence"]]
+
+    export_dir = config.attendance_dir
+    os.makedirs(export_dir, exist_ok=True)
+
+    filename = f"attendance_{class_name}_{range_label}.{format}"
+    filepath = os.path.join(export_dir, filename)
+
+    if format == "xlsx":
+        df.to_excel(filepath, index=False)
+    else:
+        df.to_csv(filepath, index=False)
+
+    return FileResponse(filepath, filename=filename)
+
+@app.get("/api/attendance/export-data")
+def export_attendance_data(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv"):
+    """Return file as base64 for pywebview native save dialog."""
+    import base64
+    from io import BytesIO
+    import pandas as pd
+
+    class_data = db.get_class(class_id)
+    class_name = class_data["name"] if class_data else f"class_{class_id}"
+
+    if date_from and date_to:
+        rows = db.get_attendance_range(class_id, date_from, date_to)
+        range_label = f"{date_from}_to_{date_to}"
+    else:
+        rows = db.get_attendance(class_id, date)
+        range_label = date
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=["student_id", "full_name", "session_date", "timestamp", "method", "confidence"])
+    else:
+        df = df[["student_id", "full_name", "session_date", "timestamp", "method", "confidence"]]
+
+    filename = f"attendance_{class_name}_{range_label}.{format}"
+
+    if format == "xlsx":
+        buf = BytesIO()
+        df.to_excel(buf, index=False)
+        content = base64.b64encode(buf.getvalue()).decode()
+    else:
+        content = base64.b64encode(df.to_csv(index=False).encode()).decode()
+
+    return {
+        "filename": filename,
+        "content": content,
+        "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if format == "xlsx" else "text/csv"
+    }
+
+# Mount the data folder for captured thumbnails
+app.mount("/data", StaticFiles(directory=os.path.join(config.base_dir, "data")), name="data")
+
+# Mount the static web folder
+web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
+os.makedirs(web_dir, exist_ok=True)
+app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
