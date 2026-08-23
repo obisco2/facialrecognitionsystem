@@ -1,0 +1,16 @@
+{
+  "name": "facialrecognitionsystem",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "setup": "bash setup.sh",
+    "dev": "concurrently -n backend,frontend -c blue,magenta \"bash -c 'source .venv/bin/activate && uvicorn core.backend:app --reload --port 8000'\" \"bun run --cwd frontend dev\"",
+    "build": "bash build.sh",
+    "test": "bun run --cwd frontend test",
+    "e2e": "bun run --cwd frontend e2e"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

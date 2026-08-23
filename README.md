@@ -176,41 +176,102 @@ Webcam → Frame Capture → Downscale (25%) → Face Detection (HOG)
 - Disparity gap calculation
 - Results export to CSV and JSON
 
+### 9. Database Module (`core/database.py`)
+**Source:** NEW — multi-role system (admin/lecturer/student)
+
+- SQLite-backed users, classes, enrollments, and attendance log
+- SHA-256 password hashing, role-based accounts
+- Enrollment (class ↔ student) management
+- Attendance history queries (by date and by date range)
+
+### 10. Web Backend (`core/backend.py`)
+**Source:** NEW — FastAPI web/desktop migration
+
+- REST API mirroring every GUI action (auth, users, classes, sessions, enrollment, bias, config)
+- Threaded camera streamer serving MJPEG (`/api/session/video_feed`) for both live attendance and face-enrollment capture
+- Serves the built frontend (`frontend/dist`) as static files, with `web/` (legacy vanilla-JS UI) as a fallback if the frontend hasn't been built yet
+
+### 11. Frontend (`frontend/`)
+**Source:** NEW — React + TypeScript rewrite (see `.agents/tracks/frontend-rewrite_20260822/`)
+
+- Vite + React + TypeScript, Tailwind CSS v4, TanStack Query
+- "Cobalt" design system (`frontend/src/styles/tokens.css`) — cool paper, electric-cobalt accent, bordered nav with a working ⌘K command palette
+- Role-scoped routes for admin / lecturer / student, talking to `core/backend.py` over `/api/*`
+- Replaces the legacy `web/` vanilla-JS UI once built (see [Usage Guide](#usage-guide))
+
 ---
 
 ## Installation & Setup
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.10+ and a C++ compiler + CMake (the primary recognition engine is `dlib`'s 128-D encoder; LBPH is a pure-OpenCV fallback — see [Technical Decisions](#technical-decisions))
+- [Bun](https://bun.sh) — package manager/runtime for the `frontend/` React app
 - Webcam
 - Windows/Linux/macOS
 
-### Step 1: Install Dependencies
+### One-command setup
+
+```bash
+./setup.sh          # macOS/Linux
+.\setup.ps1          # Windows (PowerShell)
+```
+
+This creates `.venv`, installs `requirements.txt` (backend), and runs `bun install` (frontend). Also run `bun install` at the repo root once (installs `concurrently`, used by `bun run dev`). See [Usage Guide](#usage-guide) for running the app afterwards.
+
+### Manual setup
 
 ```bash
 cd facialrecognitionsystem
+python -m venv .venv && source .venv/bin/activate   # .venv\Scripts\Activate.ps1 on Windows
 pip install -r requirements.txt
+cd frontend && bun install
 ```
 
-> **Note:** This system uses pure OpenCV — no C++ compiler or CMake needed.
+> **Note:** `setuptools<81` is pinned in `requirements.txt` — `face_recognition_models` still imports the now-removed `pkg_resources`, which recent `setuptools` dropped. Needed on Python 3.13+/3.14.
 
-### Step 2: Verify Installation
+### Verify installation
 
 ```bash
 python -c "import cv2; print('OpenCV', cv2.__version__)"
 python -c "import cv2.face; print('LBPH available')"
+python -c "import face_recognition; print('dlib engine OK')"
 ```
 
-### Step 3: Configure (Optional)
+### Configure (optional)
 
-Edit `config.ini` to adjust camera index, recognition tolerance, or paths.
+Edit `config.ini` to adjust camera index, recognition tolerance, engine (`auto`/`dlib`/`lbph`), or paths.
 
 ---
 
 ## Usage Guide
 
-### Launch GUI Mode
+### Web + desktop app (current)
+
+```bash
+bun run dev           # backend :8000 + frontend :5173 together, one command
+```
+
+Or, without the root `package.json` (`concurrently`), use the shell scripts directly:
+
+```bash
+./dev.sh              # macOS/Linux
+.\dev.ps1              # Windows (PowerShell)
+```
+
+Open http://127.0.0.1:5173, sign in as admin/lecturer/student, and use the role-appropriate dashboard (live attendance session, class/user management, bias evaluation, enrollment wizard).
+
+To run it as the packaged desktop app (`pywebview` window instead of a browser tab):
+
+```bash
+./build.sh            # or .\build.ps1 on Windows — builds frontend/dist
+source .venv/bin/activate
+python main_web.py
+```
+
+`core/backend.py` auto-serves `frontend/dist` once built (falling back to the legacy `web/` vanilla-JS UI otherwise).
+
+### Legacy Tkinter GUI
 
 ```bash
 python main.py
@@ -311,17 +372,25 @@ TRAINING_DIR = data/training
 ATTENDANCE_DIR = data/attendance
 MODELS_DIR = models
 
+[Database]
+DB_PATH = data/users.db
+
 [Camera]
 CAMERA_INDEX = 0
 FRAME_SCALE = 0.25
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
+; Leave STREAM_URL blank to use local webcam (CAMERA_INDEX).
+STREAM_URL =
 
 [Recognition]
 TOLERANCE = 0.6
-MODEL = haar
+MODEL = hog
+; ENGINE: auto (dlib if installed, LBPH fallback), dlib, lbph
+ENGINE = auto
 NUMBER_OF_SAMPLES = 100
 FACE_PADDING = 20
+MIN_ENROLLMENT_PHOTOS = 5
 
 [Attendance]
 SESSION_TIMEOUT = 60
@@ -330,6 +399,10 @@ EXPORT_FORMAT = csv
 
 [Security]
 ADMIN_PASSWORD = admin
+
+[UI]
+THEME = dark
+APP_NAME = AttendIQ
 
 [Logging]
 LEVEL = INFO
@@ -340,8 +413,10 @@ FILE = face_recog.log
 |-----------|-------------|---------|
 | `TOLERANCE` | Match threshold (lower = stricter) | 0.6 |
 | `FRAME_SCALE` | Detection downscale factor | 0.25 |
-| `MODEL` | Detection model (`haar`/`dnn`) | haar |
+| `ENGINE` | Recognition engine (`auto`/`dlib`/`lbph`) | auto |
+| `STREAM_URL` | RTSP/HTTP IP camera URL (blank = local webcam) | (blank) |
 | `NUMBER_OF_SAMPLES` | Images per person for enrollment | 100 |
+| `MIN_ENROLLMENT_PHOTOS` | Minimum valid photos required to confirm enrollment | 5 |
 | `DUPLICATE_PREVENTION` | Prevent double-marking per session | true |
 
 ---
@@ -349,44 +424,58 @@ FILE = face_recog.log
 ## Project Structure
 
 ```
-FaceRecogSystem/
-├── main.py                 # Entry point with CLI modes
-├── config.ini              # Externalized configuration
-├── requirements.txt        # Python dependencies
+facialrecognitionsystem/
+├── main.py                 # Legacy Tkinter GUI entry point
+├── main_web.py             # Current entry point — pywebview desktop shell around core/backend.py
+├── config.ini               # Externalized configuration
+├── requirements.txt         # Python dependencies
+├── setup.sh / setup.ps1     # One-command bootstrap (.venv + bun install)
+├── dev.sh / dev.ps1         # Run backend (:8000) + frontend (:5173) together
+├── build.sh / build.ps1     # Build frontend/dist for the desktop app
 │
-├── core/                   # Core business logic
+├── core/                    # Core business logic
 │   ├── __init__.py
-│   ├── config.py           # Configuration manager (singleton)
-│   ├── face_detector.py    # Face detection (Haar/DNN)
-│   ├── face_encoder.py     # Face encoding (128-D vectors)
-│   ├── data_collector.py   # Training data capture
-│   ├── recognizer.py       # Recognition engine
-│   └── attendance.py       # Attendance record management
+│   ├── config.py            # Configuration manager (singleton)
+│   ├── database.py          # SQLite layer — users, classes, enrollments, attendance
+│   ├── backend.py           # FastAPI app — REST API + camera streaming + static hosting
+│   ├── face_detector.py     # Face detection (Haar/DNN)
+│   ├── face_encoder.py      # Face encoding (dlib 128-D, LBPH fallback)
+│   ├── data_collector.py    # Training data capture
+│   ├── recognizer.py        # Recognition engine
+│   └── attendance.py        # Attendance record management
 │
-├── gui/                    # User interface
+├── frontend/                # Current UI — React + TypeScript + Vite (see frontend/README.md)
+│   └── src/
+│
+├── web/                     # Legacy vanilla-JS UI, served if frontend/dist isn't built
+│
+├── gui/                     # Legacy Tkinter UI (main.py)
 │   ├── __init__.py
-│   └── app.py              # Tkinter GUI application
+│   └── app.py
 │
-├── bias/                   # Bias evaluation framework
+├── bias/                    # Bias evaluation framework
 │   ├── __init__.py
-│   ├── evaluator.py        # Bias metrics computation
-│   └── datasets.py         # Dataset management helpers
+│   ├── evaluator.py         # Bias metrics computation
+│   └── datasets.py          # Dataset management helpers
 │
-├── data/                   # Runtime data
-│   ├── known_faces/        # Known face images (by person)
-│   ├── training/           # Captured training images
-│   └── attendance/         # Attendance CSV files
+├── data/                    # Runtime data
+│   ├── known_faces/         # Known face images (by person)
+│   ├── training/            # Captured training images
+│   ├── attendance/          # Attendance CSV/Excel exports
+│   └── users.db             # SQLite database
 │
-└── models/                 # Saved models (future use)
+└── models/                  # Saved models (future use)
 ```
 
 ---
 
 ## Technical Decisions
 
-### Why Pure OpenCV (no dlib)?
+### dlib (128-D) as primary engine, LBPH as fallback
 
-| Aspect | face_recognition (dlib) | Pure OpenCV |
+The system originally shipped pure-OpenCV-only (no dlib) for the reasons below — that rationale is preserved here since it still explains the LBPH fallback path (`ENGINE=lbph` in `config.ini`), but the *primary* engine (`ENGINE=auto`/`dlib`) is now `face_recognition`'s dlib-based 128-D encoder, for materially better accuracy:
+
+| Aspect | face_recognition (dlib) | Pure OpenCV (LBPH) |
 |--------|------------------------|-------------|
 | Installation | Requires CMake + C++ compiler | `pip install` only |
 | Accuracy | Higher (~95%+) | Good (~85-90% with LBPH) |
@@ -395,11 +484,13 @@ FaceRecogSystem/
 | Cross-platform | Compilation issues on Windows | Works everywhere |
 | Dependencies | dlib (heavy) | opencv-contrib-python (light) |
 
-We chose pure OpenCV because:
+Original rationale for the pure-OpenCV fallback path (still valid when `ENGINE=lbph`):
 1. No compilation issues — works on any system with `pip install`
 2. LBPH is well-studied for bias research (lighter skin bias documented)
 3. Training step provides explicit control over the recognition model
 4. OpenCV's face module is mature and well-documented
+
+Why the switch to dlib as default: significantly higher accuracy and single-image enrollment outweigh the compiler/CMake install cost once `setup.sh`/`setup.ps1` automate it. `ENGINE=auto` in `config.ini` still falls back to LBPH if dlib isn't installed, so the system degrades gracefully rather than failing outright.
 
 ### Why Threaded Camera?
 
