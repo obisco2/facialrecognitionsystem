@@ -91,6 +91,7 @@ export interface LiveSessionState {
   marked: { time: string; name: string; conf: string }[]
   unknown: number
   date: string | null
+  camera_active?: boolean
 }
 
 export interface EnrollmentSlotResult {

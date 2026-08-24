@@ -126,15 +126,16 @@ class CameraStreamer:
 
             self.recognizer = Recognizer(det, enc)
             opened = self.recognizer.start_camera(source)
+            self.camera_available = opened
             if not opened:
-                self.running = False
-                raise RuntimeError("Failed to open camera")
+                logger.warning("Failed to open camera. Running in client-side camera mode.")
         else:
             # Enrollment capture
             self.camera = cv2.VideoCapture(source)
-            if not self.camera.isOpened():
-                self.running = False
-                raise RuntimeError("Failed to open camera")
+            self.camera_available = self.camera.isOpened()
+            if not self.camera_available:
+                logger.warning("Failed to open camera for enrollment. Running in client-side camera mode.")
+                self.camera = None
 
         # Start thread
         threading.Thread(target=self._loop, daemon=True).start()
@@ -443,7 +444,8 @@ def get_live_session():
         "mode": streamer.active_mode,
         "marked": streamer.marked_names,
         "unknown": streamer.unknown_count,
-        "date": streamer.session_date
+        "date": streamer.session_date,
+        "camera_active": getattr(streamer, "camera_available", True)
     }
 
 async def gen_frames():
@@ -504,6 +506,29 @@ def recognize_frame(req: RecognizeFrameRequest):
                 "left": int(left / scale),
             },
         })
+
+        # Log attendance in database if session is running (useful for VPS deployment)
+        if is_known and streamer.running and streamer.active_mode == "attendance":
+            if name not in streamer.marked_ids:
+                student = db.get_user_by_name(name)
+                if student and student["id"] not in streamer.marked_ids:
+                    logged = db.log_attendance(
+                        student["id"],
+                        streamer.session_class_id,
+                        session_date=streamer.session_date,
+                        method="face",
+                        confidence=dist,
+                        marked_by=streamer.lecturer_id
+                    )
+                    streamer.marked_ids.add(student["id"])
+                    streamer.marked_ids.add(name)
+                    if logged:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        streamer.marked_names.append({
+                            "time": ts,
+                            "name": name,
+                            "conf": f"{dist:.2f}" if dist else "—"
+                        })
 
     return {
         "recognized": recognized,

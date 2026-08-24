@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Play, Square, UserPlus } from 'lucide-react'
+import { Play, Square, UserPlus, CameraOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getClasses, getUsers, startSession, stopSession, getLiveSession, logManualAttendance, videoFeedUrl } from '@/lib/api'
-import type { User } from '@/lib/api'
+import { getClasses, getUsers, startSession, stopSession, getLiveSession, logManualAttendance, videoFeedUrl, recognizeFrame } from '@/lib/api'
+import type { User, RecognizeResult } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+
+const RECOGNITION_INTERVAL = 1500 // ms between recognition frames
 
 export default function LiveSession() {
   const { user } = useAuth()
@@ -16,6 +18,14 @@ export default function LiveSession() {
   const [showManual, setShowManual] = useState(false)
   const [manualMsg, setManualMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [manualMarked, setManualMarked] = useState<Set<number>>(new Set())
+
+  // Browser camera fallback state (for VPS deployments)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [cameraActive, setCameraActive] = useState(false)
+  const [faces, setFaces] = useState<RecognizeResult[]>([])
 
   const { data: classes } = useQuery({
     queryKey: ['classes', user?.id],
@@ -59,12 +69,82 @@ export default function LiveSession() {
     return live?.marked.some((m) => m.name === s.full_name) ?? false
   }
 
+  // Start browser camera
+  const startCamera = useCallback(async () => {
+    setCameraError(null)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+        setCameraActive(true)
+      }
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Camera access denied')
+      setCameraActive(false)
+    }
+  }, [])
+
+  // Stop browser camera
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    setCameraActive(false)
+    setFaces([])
+  }, [])
+
+  // Capture frame and send to backend for recognition
+  const captureAndRecognize = useCallback(async () => {
+    if (!videoRef.current || !canvasRef.current || !cameraActive) return
+
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    ctx.drawImage(video, 0, 0)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+    const base64 = dataUrl.split(',')[1]
+
+    try {
+      const result = await recognizeFrame(base64)
+      setFaces(result.recognized)
+    } catch {
+      // Recognition failure is non-fatal — skip this frame
+    }
+  }, [cameraActive])
+
+  // Run recognition loop (only if backend camera is inactive/missing)
+  useEffect(() => {
+    if (!running || !cameraActive || live?.camera_active) return
+    const interval = setInterval(captureAndRecognize, RECOGNITION_INTERVAL)
+    return () => clearInterval(interval)
+  }, [running, cameraActive, captureAndRecognize, live?.camera_active])
+
   async function handleStart() {
     if (!classId || !user) return
     setStarting(true)
     try {
       await startSession(classId, user.id)
       setRunning(true)
+      
+      // Fetch status to check if backend camera opened successfully
+      const liveData = await queryClient.fetchQuery({
+        queryKey: ['live-session'],
+        queryFn: getLiveSession,
+      })
+      
+      if (liveData && !liveData.camera_active) {
+        // Soft fallback to browser camera if server camera is unavailable (e.g. VPS)
+        await startCamera()
+      }
     } finally {
       setStarting(false)
     }
@@ -75,7 +155,17 @@ export default function LiveSession() {
     setRunning(false)
     setShowManual(false)
     setManualMarked(new Set())
+    stopCamera()
   }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
+    }
+  }, [])
 
   return (
     <div className="flex h-full flex-col">
@@ -120,9 +210,58 @@ export default function LiveSession() {
       {/* Main panel */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-[var(--radius-lg)] bg-graphite p-4">
         {/* Camera feed */}
-        <div className="min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
           {running ? (
-            <img src={videoFeedUrl} alt="Live camera feed" className="h-full w-full object-contain" />
+            live?.camera_active ? (
+              <img src={videoFeedUrl} alt="Live camera feed" className="h-full w-full object-contain" />
+            ) : (
+              <>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="h-full w-full object-contain"
+                />
+                <canvas ref={canvasRef} className="hidden" />
+
+                {/* Face overlays */}
+                {faces.map((face, i) => {
+                  if (!face.box) return null
+                  const { top, right, bottom, left } = face.box
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute border-2 ${face.is_known ? 'border-green-400' : 'border-red-400'}`}
+                      style={{
+                        top: `${(top / 480) * 100}%`,
+                        left: `${(left / 640) * 100}%`,
+                        width: `${((right - left) / 640) * 100}%`,
+                        height: `${((bottom - top) / 480) * 100}%`,
+                      }}
+                    >
+                      <div
+                        className={`absolute -top-6 left-0 whitespace-nowrap px-1 text-xs text-white ${
+                          face.is_known ? 'bg-green-500/80' : 'bg-red-500/80'
+                        }`}
+                      >
+                        {face.is_known
+                          ? `${face.name} ${face.confidence?.toFixed(2)}`
+                          : 'Unknown'}
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Camera error overlay */}
+                {cameraError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+                    <CameraOff className="mb-2 size-8 text-danger" />
+                    <p className="text-sm text-danger">{cameraError}</p>
+                  </div>
+                )}
+              </>
+            )
           ) : (
             <div className="flex h-full items-center justify-center">
               <p className="font-mono-label text-graphite-ink-2">Select a class and start a session</p>
@@ -134,7 +273,7 @@ export default function LiveSession() {
         {running && (
           <div className="grid grid-cols-3 gap-3 shrink-0">
             <Stat label="Marked" value={String((live?.marked.length ?? 0) + manualMarked.size)} />
-            <Stat label="Unknown" value={String(live?.unknown ?? 0)} />
+            <Stat label="Unknown" value={String(live?.camera_active ? (live?.unknown ?? 0) : faces.filter((f) => !f.is_known).length)} />
             <Stat label="Session date" value={live?.date ?? '—'} />
           </div>
         )}
