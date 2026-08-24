@@ -541,6 +541,7 @@ def recognize_frame(req: RecognizeFrameRequest):
 
 @app.post("/api/enrollment/start")
 def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] = None):
+    full_name = full_name.strip()
     try:
         streamer.start("enrollment", user_id=user_id, full_name=full_name, camera_source=camera_source)
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
@@ -572,6 +573,7 @@ async def upload_enrollment(user_id: int, files: list[UploadFile] = File(...)):
 
 @app.post("/api/enrollment/capture")
 def capture_enrollment(user_id: int, full_name: str, slot_idx: int):
+    full_name = full_name.strip()
     if streamer.latest_raw_frame is None:
         raise HTTPException(status_code=400, detail="Camera feed not ready")
     
@@ -725,6 +727,7 @@ def validate_enrollment(user_id: int):
 
 @app.post("/api/enrollment/test/start")
 def start_enrollment_test(user_id: int, full_name: str):
+    full_name = full_name.strip()
     try:
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
         person_dir = os.path.join(temp_dir, full_name)
@@ -742,6 +745,7 @@ def start_enrollment_test(user_id: int, full_name: str):
 
 @app.post("/api/enrollment/confirm")
 def confirm_enrollment(user_id: int, full_name: str):
+    full_name = full_name.strip()
     streamer.stop()
     
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
@@ -886,6 +890,7 @@ def get_student_summary(student_id: int):
 
 @app.post("/api/student/retrain")
 def retrain_student_model(user_id: int, full_name: str):
+    full_name = full_name.strip()
     try:
         enc = FaceEncoder(engine=config.recognition_engine)
         enc.load_known_faces(config.known_faces_dir)

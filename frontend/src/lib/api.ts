@@ -1,6 +1,8 @@
 // Typed client for core/backend.py — mirrors its routes 1:1.
 
-const BASE = '/api'
+const BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api'
 
 class ApiError extends Error {
   status: number
@@ -175,7 +177,7 @@ export const startSession = (classId: number, lecturerId: number, cameraSource?:
 }
 export const stopSession = () => post<{ status: string }>('/session/stop')
 export const getLiveSession = () => get<LiveSessionState>('/session/live')
-export const videoFeedUrl = '/api/session/video_feed'
+export const videoFeedUrl = `${BASE}/session/video_feed`
 
 // --- Browser-based recognition ---
 export interface RecognizeResult {
