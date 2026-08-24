@@ -26,7 +26,7 @@ export function AppShell() {
   const items = NAV_BY_ROLE[user.role]
 
   return (
-    <div className="flex min-h-svh">
+    <div className="flex h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-rule bg-paper-2/40">
         <div className="flex h-14 items-center gap-2 border-b border-rule px-4">
           <ScanFace className="size-5 text-accent" aria-hidden />

@@ -1,35 +1,48 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
+# Virtual environments
 .venv/
-*.egg-info/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Node / JS dependencies and builds
+node_modules/
+frontend/node_modules/
 dist/
-build/
+frontend/dist/
+.eslintcache
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/users.db
 
-# OS
+# Private student data & local exports
+data/known_faces/
+data/attendance/
+data/evaluation_dataset/
+scratch/
+
+# Logs
+*.log
+face_recog.log
+
+# OS files
 .DS_Store
 Thumbs.db
 
-# Project specific
-data/known_faces/*/
-!data/known_faces/.gitkeep
-data/training/*/
-!data/training/.gitkeep
-data/attendance/*.csv
-!data/attendance/.gitkeep
-data/evaluation_dataset/
-models/*.npz
-*.log
-
-.vercel
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+.vercel/

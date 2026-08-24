@@ -9,10 +9,12 @@ import AdminUsers from '@/pages/admin/UsersPage'
 import AdminBias from '@/pages/admin/Bias'
 import AdminSettings from '@/pages/admin/SettingsPage'
 import LecturerDashboard from '@/pages/lecturer/Dashboard'
+import LecturerClasses from '@/pages/lecturer/Classes'
 import LiveSession from '@/pages/lecturer/LiveSession'
 import LecturerHistory from '@/pages/lecturer/History'
 import StudentDashboard from '@/pages/student/Dashboard'
 import StudentEnrollment from '@/pages/student/Enrollment'
+import StudentSettings from '@/pages/student/Settings'
 
 function Root() {
   const { user } = useAuth()
@@ -38,6 +40,7 @@ export default function App() {
       <Route element={<ProtectedRoute role="lecturer" />}>
         <Route element={<AppShell />}>
           <Route path="/lecturer" element={<LecturerDashboard />} />
+          <Route path="/lecturer/classes" element={<LecturerClasses />} />
           <Route path="/lecturer/live" element={<LiveSession />} />
           <Route path="/lecturer/history" element={<LecturerHistory />} />
         </Route>
@@ -47,6 +50,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/student" element={<StudentDashboard />} />
           <Route path="/student/enrollment" element={<StudentEnrollment />} />
+          <Route path="/student/settings" element={<StudentSettings />} />
         </Route>
       </Route>
 

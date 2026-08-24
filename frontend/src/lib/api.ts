@@ -50,6 +50,18 @@ export interface User {
   department?: string | null
   level?: string | null
   face_enrolled?: number
+  created_at?: string | null
+}
+
+export interface ClassSummary {
+  class_id: number
+  class_name: string
+  class_code: string
+  lecturer_name?: string | null
+  schedule?: string | null
+  sessions_present: number
+  total_sessions: number
+  percent: number
 }
 
 export interface SchoolClass {
@@ -170,12 +182,23 @@ export const startEnrollment = (userId: number, fullName: string, cameraSource?:
   if (cameraSource) q.set('camera_source', cameraSource)
   return post<{ status: string }>(`/enrollment/start?${q}`)
 }
+export const uploadEnrollment = (userId: number, files: File[]) => {
+  const form = new FormData()
+  files.forEach((f) => form.append('files', f))
+  return request<{ status: string; count: number }>(`/enrollment/upload?user_id=${userId}`, {
+    method: 'POST',
+    body: form,
+    headers: {},
+  })
+}
 export const captureEnrollmentSlot = (userId: number, fullName: string, slotIdx: number) =>
   post<{ status: string; filepath: string }>(
     `/enrollment/capture?user_id=${userId}&full_name=${encodeURIComponent(fullName)}&slot_idx=${slotIdx}`,
   )
 export const deleteEnrollmentSlot = (userId: number, slotIdx: number) =>
   del<{ status: string }>(`/enrollment/slot?user_id=${userId}&slot_idx=${slotIdx}`)
+export const enrollmentCaptureUrl = (userId: number, slotIdx: number) =>
+  `${BASE}/enrollment/capture/${userId}/${slotIdx}`
 export const validateEnrollment = (userId: number) =>
   post<{ results: EnrollmentSlotResult[]; valid_count: number; can_proceed: boolean }>(
     `/enrollment/validate?user_id=${userId}`,
@@ -185,9 +208,31 @@ export const startEnrollmentTest = (userId: number, fullName: string) =>
 export const confirmEnrollment = (userId: number, fullName: string) =>
   post<{ status: string }>(`/enrollment/confirm?user_id=${userId}&full_name=${encodeURIComponent(fullName)}`)
 
+// --- Student summary ---
+export const getStudentSummary = (studentId: number) =>
+  get<ClassSummary[]>(`/student/summary/${studentId}`)
+
+// --- Student retrain ---
+export const retrainFaceModel = (userId: number, fullName: string) =>
+  post<{ status: string }>(`/student/retrain?user_id=${userId}&full_name=${encodeURIComponent(fullName)}`)
+
 // --- Config ---
 export const getConfig = () => get<SystemConfig>('/config')
 export const saveConfig = (data: SystemConfig) => post<{ status: string }>('/config', data)
+
+// --- Admin stats ---
+export interface AdminStats {
+  total_users: number
+  students: number
+  students_enrolled: number
+  students_pending: number
+  lecturers: number
+  classes: number
+  total_attendance: number
+  today_attendance: number
+  total_enrollments: number
+}
+export const getAdminStats = () => get<AdminStats>('/admin/stats')
 
 // --- Bias ---
 export const runBiasEvaluation = () => post<{ status: string }>('/bias/evaluate')

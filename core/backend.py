@@ -1,6 +1,7 @@
 import os
 import cv2
 import time
+import asyncio
 import logging
 import threading
 from typing import Optional
@@ -75,6 +76,19 @@ class CameraStreamer:
         self.session_date = datetime.now().strftime("%Y-%m-%d")
         self.marked_ids = set()
         self.marked_names = []
+        if mode == "attendance" and class_id:
+            try:
+                existing = db.get_attendance(class_id, self.session_date)
+                for rec in existing:
+                    self.marked_ids.add(rec["student_id"])
+                    self.marked_ids.add(rec["full_name"])
+                    self.marked_names.append({
+                        "time": rec["timestamp"],
+                        "name": rec["full_name"],
+                        "conf": f"{rec['confidence']:.2f}" if rec["confidence"] else "—"
+                    })
+            except Exception as e:
+                logger.error("Failed to preload marked students: %s", e)
         self.unknown_count = 0
         self.enrollment_user_id = user_id
         self.enrollment_full_name = full_name
@@ -159,8 +173,12 @@ class CameraStreamer:
                     names = self._last_names
                     distances = self._last_distances
 
-                # process_frame already returns original-size coordinates
-                for (top, right, bottom, left), name, dist in zip(locations, names, distances):
+                # process_frame returns coordinates scaled down by `scale`. Scale them back up.
+                for (top_s, right_s, bottom_s, left_s), name, dist in zip(locations, names, distances):
+                    top = int(top_s / scale)
+                    right = int(right_s / scale)
+                    bottom = int(bottom_s / scale)
+                    left = int(left_s / scale)
                     is_known = (name != "Unknown")
                     colour = (0, 200, 100) if is_known else (0, 60, 200)
 
@@ -185,8 +203,9 @@ class CameraStreamer:
                                     confidence=dist,
                                     marked_by=self.lecturer_id
                                 )
+                                self.marked_ids.add(student["id"])
+                                self.marked_ids.add(name)
                                 if logged:
-                                    self.marked_ids.add(student["id"])
                                     ts = datetime.now().strftime("%H:%M:%S")
                                     self.marked_names.append({
                                         "time": ts,
@@ -422,16 +441,24 @@ def get_live_session():
         "date": streamer.session_date
     }
 
-def gen_frames():
+async def gen_frames():
     while streamer.running:
         frame = streamer.get_jpeg()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.04)
+        await asyncio.sleep(0.04)
 
 @app.get("/api/session/video_feed")
 def video_feed():
-    return StreamingResponse(gen_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        gen_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 # --- Face Enrollment Endpoints ---
 
@@ -487,6 +514,21 @@ def delete_enrollment_slot(user_id: int, slot_idx: int):
         os.remove(filepath)
     return {"status": "ok"}
 
+@app.get("/api/enrollment/capture/{user_id}/{slot_idx}")
+def get_enrollment_capture(user_id: int, slot_idx: int):
+    temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+    filepath = os.path.join(temp_dir, f"capture_{slot_idx}.jpg")
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Capture not found")
+    import io
+    with open(filepath, "rb") as f:
+        content = f.read()
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache"},
+    )
+
 @app.post("/api/enrollment/validate")
 def validate_enrollment(user_id: int):
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
@@ -496,6 +538,7 @@ def validate_enrollment(user_id: int):
 
     results = []
     valid_count = 0
+    face_encodings = []
 
     for i in range(5):
         path = os.path.join(temp_dir, f"capture_{i}.jpg")
@@ -522,14 +565,85 @@ def validate_enrollment(user_id: int):
             results.append({"slot": i, "state": "invalid", "message": "Face too small"})
             continue
 
+        # Encode face for impersonation checks (with bounds safety)
+        try:
+            h, w = img.shape[:2]
+            y1, y2 = max(0, int(t*2)), min(h, int(b*2))
+            x1, x2 = max(0, int(l*2)), min(w, int(r*2))
+            face_img = img[y1:y2, x1:x2]
+            if face_img.size > 0 and face_img.shape[0] > 10 and face_img.shape[1] > 10:
+                enc = encoder.compute_encoding(face_img)
+                if enc is not None:
+                    face_encodings.append((i, enc))
+        except Exception:
+            pass  # Encoding failure is non-fatal — skip impersonation for this slot
+
         blur = encoder.blur_score(img)
         if blur < 80.0:
             results.append({"slot": i, "state": "warn", "message": f"Blurry (score {blur:.0f})"})
             valid_count += 1
         else:
-            results.append({"slot": i, "state": "valid", "message": "✓ Face detected"})
+            results.append({"slot": i, "state": "valid", "message": "Face detected"})
             valid_count += 1
 
+    # --- Impersonation check: verify all photos show the same person ---
+    try:
+        if len(face_encodings) >= 2:
+            first_idx, first_enc = face_encodings[0]
+            for slot_idx, enc in face_encodings[1:]:
+                try:
+                    if encoder.is_dlib:
+                        import face_recognition as _fr
+                        dist = float(_fr.face_distance([first_enc], enc)[0])
+                        if dist > 0.6:
+                            results[first_idx]["state"] = "invalid"
+                            results[first_idx]["message"] = "Photos show different people"
+                            results[slot_idx]["state"] = "invalid"
+                            results[slot_idx]["message"] = "Photos show different people"
+                    else:
+                        if enc.shape == first_enc.shape:
+                            corr = cv2.matchTemplate(enc, first_enc, cv2.TM_CCOEFF_NORMED)[0][0]
+                            if corr < 0.3:
+                                results[first_idx]["state"] = "invalid"
+                                results[first_idx]["message"] = "Photos show different people"
+                                results[slot_idx]["state"] = "invalid"
+                                results[slot_idx]["message"] = "Photos show different people"
+                except Exception:
+                    pass  # Comparison failure for one slot is non-fatal
+    except Exception:
+        pass  # Entire impersonation check failure is non-fatal
+
+    # --- Owner check: for re-enrollment, verify new photos match existing face ---
+    try:
+        user = db.get_user(user_id)
+        if user and user.get("face_enrolled"):
+            person_dir = os.path.join(config.known_faces_dir, user["full_name"])
+            if os.path.exists(person_dir) and face_encodings:
+                owner_encoder = FaceEncoder(engine=config.recognition_engine)
+                existing_encs, _ = owner_encoder.load_known_faces(person_dir)
+                if existing_encs:
+                    ref_enc = existing_encs[0]
+                    for slot_idx, enc in face_encodings:
+                        try:
+                            if owner_encoder.is_dlib:
+                                import face_recognition as _fr
+                                dist = float(_fr.face_distance([ref_enc], enc)[0])
+                                if dist > 0.6:
+                                    results[slot_idx]["state"] = "invalid"
+                                    results[slot_idx]["message"] = "Does not match enrolled person"
+                            else:
+                                if enc.shape == ref_enc.shape:
+                                    corr = cv2.matchTemplate(enc, ref_enc, cv2.TM_CCOEFF_NORMED)[0][0]
+                                    if corr < 0.3:
+                                        results[slot_idx]["state"] = "invalid"
+                                        results[slot_idx]["message"] = "Does not match enrolled person"
+                        except Exception:
+                            pass
+    except Exception:
+        pass  # Owner check failure is non-fatal
+
+    # Re-count valid slots after all checks
+    valid_count = sum(1 for r in results if r["state"] in ("valid", "warn"))
     return {"results": results, "valid_count": valid_count, "can_proceed": valid_count >= 3}
 
 @app.post("/api/enrollment/test/start")
@@ -562,9 +676,12 @@ def confirm_enrollment(user_id: int, full_name: str):
         shutil.rmtree(final_dir)
     os.makedirs(final_dir, exist_ok=True)
     
-    if os.path.exists(person_temp_dir):
-        for f in os.listdir(person_temp_dir):
-            shutil.copy2(os.path.join(person_temp_dir, f), os.path.join(final_dir, f))
+    # Files may be in temp_dir/ (upload path) or temp_dir/full_name/ (capture path)
+    source_dir = person_temp_dir if os.path.exists(person_temp_dir) and os.listdir(person_temp_dir) else temp_dir
+    if os.path.exists(source_dir):
+        for f in os.listdir(source_dir):
+            if f.lower().endswith((".jpg", ".jpeg", ".png")):
+                shutil.copy2(os.path.join(source_dir, f), os.path.join(final_dir, f))
             
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
@@ -644,6 +761,32 @@ def get_bias_results():
     with open(metrics_path, "r") as f:
         return json.load(f)
 
+@app.get("/api/admin/stats")
+def get_admin_stats():
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = db._conn
+
+    total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    students = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'student'").fetchone()[0]
+    enrolled = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'student' AND face_enrolled = 1").fetchone()[0]
+    lecturers = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'lecturer'").fetchone()[0]
+    classes = conn.execute("SELECT COUNT(*) FROM classes").fetchone()[0]
+    total_attendance = conn.execute("SELECT COUNT(*) FROM attendance_log").fetchone()[0]
+    today_attendance = conn.execute("SELECT COUNT(*) FROM attendance_log WHERE session_date = ?", (today,)).fetchone()[0]
+    total_enrollments = conn.execute("SELECT COUNT(*) FROM enrollments").fetchone()[0]
+
+    return {
+        "total_users": total_users,
+        "students": students,
+        "students_enrolled": enrolled,
+        "students_pending": students - enrolled,
+        "lecturers": lecturers,
+        "classes": classes,
+        "total_attendance": total_attendance,
+        "today_attendance": today_attendance,
+        "total_enrollments": total_enrollments,
+    }
+
 @app.get("/api/student/attendance/{student_name}")
 def get_student_attendance(student_name: str):
     student = db.get_user_by_name(student_name)
@@ -659,6 +802,20 @@ def get_student_attendance(student_name: str):
         (student["id"],)
     ).fetchall()
     return db._rows_to_list(rows)
+
+@app.get("/api/student/summary/{student_id}")
+def get_student_summary(student_id: int):
+    return db.get_student_summary_per_class(student_id)
+
+@app.post("/api/student/retrain")
+def retrain_student_model(user_id: int, full_name: str):
+    try:
+        enc = FaceEncoder(engine=config.recognition_engine)
+        enc.load_known_faces(config.known_faces_dir)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error("Retrain failed for user %s: %s", user_id, e)
+        raise HTTPException(status_code=500, detail=f"Retrain failed: {e}")
 
 @app.get("/api/attendance/export")
 def export_attendance(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv"):

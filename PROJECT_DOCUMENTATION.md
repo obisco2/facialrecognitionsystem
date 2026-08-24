@@ -1,42 +1,27 @@
 # Final Year Project Documentation
 ## Face Recognition Attendance System with Bias Evaluation
 
----
-
 ## 1. Project Title
+
 **Development and Evaluation of a Bias-Aware Facial Recognition System for Automated Attendance Tracking**
 
 ---
 
 ## 2. Abstract
 
-This project presents a facial recognition-based attendance system that incorporates bias evaluation across demographic groups. The system uses OpenCV's Haar Cascade for face detection and LBPH (Local Binary Pattern Histograms) face recognizer for identity matching. A Tkinter-based GUI provides a live camera feed with automatic attendance logging to CSV files. Uniquely, the project includes a bias evaluation module based on the **Gender Shades** methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories. This documentation covers the system design, implementation, and analysis of results from three reference implementations that informed the final design.
+This project builds a facial recognition attendance system with bias evaluation across demographic groups. It uses OpenCV's Haar Cascade for face detection and two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). A FastAPI backend serves a React frontend with live camera feeds, automatic attendance logging, and student enrollment. The bias evaluation module applies the Gender Shades methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories. The codebase merges strengths from three open-source reference implementations into a single, maintainable system.
 
 ---
 
-## 3. Introduction & Background
+## 3. Introduction and Background
 
 ### 3.1 The Attendance Problem
-Traditional attendance systems suffer from:
-- **Time waste:** Manual roll call takes 5-10 minutes per class
-- **Proxy attendance:** Students sign for absent classmates
-- **Hygiene concerns:** Biometric systems requiring physical contact
-- **Scalability issues:** Manual systems don't scale with class size
 
-### 3.2 Facial Recognition as a Solution
-Facial recognition offers:
-- Contactless authentication
-- Real-time processing
-- Difficult to spoof (without liveness detection)
-- Automated record-keeping
+Manual roll call wastes 5-10 minutes per class. Students sign for absent classmates. Fingerprint scanners require physical contact. None of these scale with class size. Facial recognition solves these problems: contactless, real-time, automated record-keeping.
 
-### 3.3 The Bias Problem
-Research by Buolamwini & Gebru (2018) demonstrated that commercial facial recognition systems exhibit significant accuracy disparities:
-- **Dark skin tones:** Up to 34.7% higher error rates
-- **Women:** 12-15% higher error rates than men
-- **Dark-skinned women:** Up to 46.8% error rate in some systems
+### 3.2 The Bias Problem
 
-This project addresses both the automation need AND the transparency requirement by measuring and reporting these biases.
+Buolamwini and Gebru (2018) showed that commercial face recognition systems have uneven accuracy across demographics. Dark-skinned individuals face error rates up to 34.7% higher than light-skinned individuals. Women face 12-15% higher error rates than men. Dark-skinned women face error rates up to 46.8% in some systems. A useful attendance system must report where it performs well and where it does not.
 
 ---
 
@@ -44,172 +29,139 @@ This project addresses both the automation need AND the transparency requirement
 
 ### 4.1 Face Detection Methods
 
-| Method | Approach | Speed | Accuracy | Reference |
-|--------|----------|-------|----------|-----------|
-| Haar Cascades | Viola-Jones (2001) | Fast | Moderate | Project 1 |
-| HOG + SVM | Dalal & Triggs (2005) | Fast | Good | Project 2, 3 |
-| CNN (MTCNN) | Zhang et al. (2016) | Moderate | Excellent | Not used |
-| YOLO/SSD | Redmon et al. (2016) | Real-time | Excellent | Not used |
+| Method | Approach | Speed | Accuracy |
+|--------|----------|-------|----------|
+| Haar Cascades | Viola-Jones (2001) | Fast | Moderate |
+| HOG + SVM | Dalal and Triggs (2005) | Fast | Good |
+| CNN (MTCNN) | Zhang et al. (2016) | Moderate | Excellent |
+| YOLO/SSD | Redmon et al. (2016) | Real-time | Excellent |
 
 ### 4.2 Face Recognition Methods
 
-| Method | Approach | Features | Reference |
-|--------|----------|----------|-----------|
-| LBPH | Local Binary Patterns | Histograms | Project 1 |
-| Fisherfaces | PCA + LDA | Eigenfaces | Project 1 (broken) |
-| OpenCV LBPH | LBPH recognizer | LBPH features | **This project** |
-| dlib 128-D | ResNet encoding | 128-D vector | Project 2, 3 |
-| FaceNet | Google (2015) | 128-D embedding | Not used |
-| ArcFace | Deng et al. (2018) | Angular margin | Not used |
+| Method | Features | Notes |
+|--------|----------|-------|
+| LBPH | Histograms | Used as fallback in this project |
+| dlib 128-D | 128-D vector | Primary engine in this project |
+| FaceNet | 128-D embedding | Google (2015), not used |
+| ArcFace | Angular margin | Deng et al. (2018), not used |
 
 ### 4.3 Bias in Face Recognition
-- **Gender Shades (2018):** Demonstrated intersectional disparities
-- **NIST FRVT (2019):** Confirmed demographic differentials in commercial systems
-- **Differential Performance:** Type I skin: 99.7% accuracy vs Type VI: 94.6% (NIST)
+
+- Gender Shades (2018): Exposed intersectional disparities in commercial systems
+- NIST FRVT (2019): Confirmed demographic differentials across vendors
+- Type I skin: 99.7% accuracy vs Type VI: 94.6% in NIST benchmarks
 
 ---
 
 ## 5. System Design
 
-### 5.1 Architecture Overview
+### 5.1 Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  Presentation Layer                   │
-│           Tkinter GUI + PIL Image Display             │
-├─────────────────────────────────────────────────────┤
-│                    Core Engine                        │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
-│  │ Detector  │ │ Encoder  │ │   Attendance     │    │
-│  │  (Haar)    │ │ (LBPH)   │ │   Manager        │    │
-│  └──────────┘ └──────────┘ └──────────────────┘    │
-├─────────────────────────────────────────────────────┤
-│                  Data Layer                           │
-│  CSV Files | Image Files | Configuration INI         │
-├─────────────────────────────────────────────────────┤
-│               Bias Evaluation Module                  │
-│  Fitzpatrick Scale | Gender | Intersectional         │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                   Presentation Layer                     │
+│         React + TypeScript (Tailwind CSS v4)             │
+│         Role-scoped routes: admin / lecturer / student   │
+├─────────────────────────────────────────────────────────┤
+│                    API Layer                              │
+│              FastAPI REST + MJPEG streaming               │
+├─────────────────────────────────────────────────────────┤
+│                    Core Engine                            │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐        │
+│  │ Detector  │ │ Encoder  │ │   Recognizer     │        │
+│  │ (Haar/DNN)│ │(dlib/LBPH│ │  (Detection +    │        │
+│  │           │ │ fallback)│ │   Encoding +     │        │
+│  │           │ │          │ │   Best-Match)    │        │
+│  └──────────┘ └──────────┘ └──────────────────┘        │
+├─────────────────────────────────────────────────────────┤
+│                     Data Layer                            │
+│  SQLite (users, classes, enrollments, attendance_log)    │
+│  File system (known_faces/, evaluation_dataset/)         │
+├─────────────────────────────────────────────────────────┤
+│               Bias Evaluation Module                      │
+│  Fitzpatrick Scale | Gender | Intersectional Analysis    │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### 5.2 Module Dependency Graph
 
 ```
-main.py
-  ├── core.config (Config singleton)
-  ├── core.face_detector (FaceDetector)
-  ├── core.face_encoder (FaceEncoder)
-  │     └── uses FaceDetector
-  ├── core.recognizer (Recognizer)
-  │     ├── uses FaceDetector
-  │     └── uses FaceEncoder
-  ├── core.data_collector (DataCollector)
-  │     └── uses FaceDetector
-  ├── core.attendance (AttendanceManager)
-  ├── gui.app (FaceRecognitionApp)
-  │     ├── uses Config, Recognizer, DataCollector, AttendanceManager
-  │     └── threading for camera
-  └── bias.evaluator (BiasEvaluator)
-        └── uses Recognizer
+main_web.py (pywebview desktop shell)
+  └── core.backend (FastAPI app)
+        ├── core.config (Config singleton)
+        ├── core.database (SQLite layer)
+        ├── core.recognizer
+        │     ├── core.face_detector (Haar/DNN)
+        │     └── core.face_encoder (dlib/LBPH)
+        ├── core.attendance (CSV export)
+        └── bias.evaluator
+              └── bias.datasets
+
+frontend/ (React + TypeScript + Vite)
+  └── src/pages/{admin,lecturer,student}/*.tsx
+        └── src/lib/api.ts → fetches /api/*
 ```
 
-### 5.3 Data Flow Diagram
+### 5.3 Data Flow
 
 ```
-┌─────────┐    ┌────────────┐    ┌──────────────┐    ┌────────────┐
-│  Webcam  │───▶│  Frame     │───▶│  Face        │───▶│  Face      │
-│  (cv2)   │    │  Capture   │    │  Detection   │    │  Encoding  │
-└─────────┘    └────────────┘    │  (HOG/CNN)   │    │  (128-D)   │
-                                  └──────────────┘    └─────┬──────┘
-                                                            │
-┌────────────┐    ┌────────────┐    ┌──────────────┐        │
-│  CSV File  │◀───│  Attendance│◀───│  Identity    │◀───────┘
-│  (export)  │    │  Manager   │    │  Matching    │
-└────────────┘    └────────────┘    │  (tolerance) │
-                                    └──────────────┘
+Webcam → Frame Capture → Downscale (25%) → Face Detection (Haar/DNN)
+  → Face Encoding (128-D dlib or LBPH template)
+  → Euclidean Distance Match Against Known Faces
+  → Identity + Confidence → SQLite Attendance Log
+  → MJPEG Stream → React Frontend (bounding boxes + names)
 ```
 
 ---
 
 ## 6. Implementation
 
-### 6.1 Project Comparison and Integration
+### 6.1 Integration from Three Reference Implementations
 
-The final system integrates the best parts from three reference implementations:
-
-| Feature | Project 1 (AMS) | Project 2 (Attendance) | Project 3 (Smart) | **Integrated** |
-|---------|-----------------|----------------------|-------------------|----------------|
-| Face Detection | Haar Cascade | dlib HOG | dlib HOG | **Haar Cascade** |
-| Recognition | LBPH | 128-D encoding | 128-D encoding | **128-D encoding** |
-| GUI | Tkinter | None | Tkinter | **Tkinter (enhanced)** |
+| Feature | Project 1 (AMS) | Project 2 (Attendance) | Project 3 (Smart) | **This Project** |
+|---------|-----------------|----------------------|-------------------|-----------------|
+| Face Detection | Haar Cascade | dlib HOG | dlib HOG | **Haar/DNN (configurable)** |
+| Recognition | LBPH | 128-D encoding | 128-D encoding | **128-D + LBPH fallback** |
+| GUI | Tkinter | None | Tkinter | **React + TypeScript** |
 | Threading | No | No | Yes | **Yes** |
-| Config File | No | No | INI | **INI (fixed)** |
-| Session Dedup | No | CSV read | Set-based | **Set-based** |
+| Config File | No | No | INI | **INI (singleton)** |
+| Session Dedup | No | CSV read | Set-based | **Set + DB constraint** |
 | Camera Downscale | No | 25% | None | **25%** |
-| Enrollment | 70 images | 1 image | 1 image | **100 images (configurable)** |
-| Bias Evaluation | No | No | No | **Yes (NEW)** |
-| Error Handling | Popups | None | Try/except | **Comprehensive** |
+| Enrollment | 70 images | 1 image | 1 image | **5 photos (validated)** |
+| Bias Evaluation | No | No | No | **Yes** |
+| Database | None | None | None | **SQLite (multi-role)** |
+| Web UI | No | No | No | **Yes** |
 
 ### 6.2 Code Statistics
 
 | Component | Lines | Purpose |
 |-----------|-------|---------|
-| `core/config.py` | 105 | Configuration management |
-| `core/face_detector.py` | 110 | Face detection |
-| `core/face_encoder.py` | 155 | Face encoding and matching |
-| `core/data_collector.py` | 145 | Training data capture |
-| `core/recognizer.py` | 120 | Recognition engine |
-| `core/attendance.py` | 120 | Attendance management |
-| `gui/app.py` | 230 | GUI application |
-| `bias/evaluator.py` | 230 | Bias evaluation |
-| `bias/datasets.py` | 95 | Dataset helpers |
-| `main.py` | 165 | Entry point |
-| **Total** | **~1,475** | |
+| `core/config.py` | 132 | Configuration management |
+| `core/face_detector.py` | 150 | Face detection (Haar/DNN) |
+| `core/face_encoder.py` | 415 | Face encoding and matching |
+| `core/data_collector.py` | 138 | Training data capture |
+| `core/recognizer.py` | 124 | Recognition engine |
+| `core/database.py` | 609 | SQLite database layer |
+| `core/backend.py` | 796 | FastAPI backend and camera streaming |
+| `core/attendance.py` | 129 | Attendance CSV management |
+| `bias/evaluator.py` | 244 | Bias evaluation metrics |
+| `bias/datasets.py` | 106 | Dataset helpers |
+| **Total (Python)** | **~2,850** | |
+| **Total (TypeScript)** | **~3,000** | React frontend |
 
 ### 6.3 Key Algorithms
 
 #### Face Encoding (128-D)
-```
-Input: RGB Image (150×150 pixels)
-  ↓
-  Face Detection (HOG or CNN)
-  ↓
-  Face Alignment (68-point landmarks)
-  ↓
-  LBPH Feature Extraction (OpenCV)
-  ↓
-  128-Dimensional Encoding Vector
-  ↓
-  Output: [0.12, -0.03, 0.45, ..., 0.78] (128 floats)
-```
+
+The dlib encoder takes a BGR image, converts it to RGB, detects a face using HOG, aligns it with 68-point landmarks, and runs it through a ResNet to produce a 128-dimensional float32 vector. The LBPH fallback converts the face to grayscale, resizes to 100x100, and uses it as a template for histogram matching.
 
 #### Identity Matching
-```
-Input: Unknown face encoding (128-D)
-  ↓
-  Compute Euclidean distance to ALL known encodings
-  ↓
-  Find minimum distance: d_min = min(d_1, d_2, ..., d_n)
-  ↓
-  If d_min ≤ TOLERANCE (0.6):
-      Return matched name
-  Else:
-      Return "Unknown"
-```
+
+The system computes the Euclidean distance between the unknown face encoding and every known encoding. If the minimum distance falls below the tolerance threshold (default 0.6 for dlib), it returns the matched name. For LBPH, it uses OpenCV's `predict()` with a confidence score normalized to [0, 1].
 
 #### Attendance Deduplication
-```
-Input: Recognized name
-  ↓
-  Check if name ∈ session_log (set lookup, O(1))
-  ↓
-  If NOT in session_log:
-      Add to session_log
-      Write to CSV with timestamp
-      Return True (recorded)
-  Else:
-      Return False (duplicate prevented)
-```
+
+Each recognized student ID is stored in a set. Before writing to the database, the system checks if the ID is already in the set. SQLite also enforces a UNIQUE constraint on (student_id, class_id, session_date), so duplicates are blocked at both the application and database layers.
 
 ---
 
@@ -217,134 +169,127 @@ Input: Recognized name
 
 ### 7.1 Fitzpatrick Skin Type Scale
 
-| Type | Description | Typical Characteristics |
-|------|-------------|----------------------|
-| I | Very Light | Always burns, never tans |
-| II | Light | Usually burns, tans minimally |
-| III | Medium | Sometimes burns, tans uniformly |
-| IV | Olive | Rarely burns, tans easily |
-| V | Dark | Very rarely burns, tans darkly |
-| VI | Very Dark | Never burns, deeply pigmented |
+| Type | Description |
+|------|-------------|
+| I | Very light. Always burns, never tans. |
+| II | Light. Usually burns, tans minimally. |
+| III | Medium. Sometimes burns, tans uniformly. |
+| IV | Olive. Rarely burns, tans easily. |
+| V | Dark. Very rarely burns, tans darkly. |
+| VI | Very dark. Never burns, deeply pigmented. |
 
-### 7.2 Metrics Computed
+### 7.2 Metrics
 
-1. **Detection Rate** = Faces Detected / Total Images
-2. **Recognition Accuracy** = Correctly Identified / Faces Detected
+1. **Detection Rate** = Faces detected / Total images
+2. **Recognition Accuracy** = Correctly identified / Faces detected
 3. **False Negative Rate** = (Detected - Correct) / Detected
 4. **Disparity Gap** = max(accuracy) - min(accuracy) across groups
 
 ### 7.3 Intersectional Analysis
 
-By measuring accuracy across skin type × gender combinations, we can identify:
-- Which specific subgroups face the highest error rates
-- Whether biases compound at intersections
-- Where mitigation efforts should be focused
+Measuring accuracy across skin type x gender combinations reveals which subgroups face the highest error rates and whether biases compound at intersections.
+
+### 7.4 Running an Evaluation
+
+1. Request evaluation results in the admin dashboard to bootstrap the dataset structure at `data/evaluation_dataset/`.
+2. Place representative facial images in the demographic subfolders.
+3. Fill in `annotations.csv` with filename, skin type, gender, and expected identity for each image.
+4. Click **Run evaluation** on the admin dashboard or run `python main.py --evaluate`.
+5. Results persist to `results.csv` and `metrics.json` in the evaluation directory.
 
 ---
 
-## 8. Testing & Results
+## 8. Testing and Results
 
-### 8.1 Unit Test Coverage
+### 8.1 Test Coverage
 
-| Module | Functions | Testable | Covered |
-|--------|-----------|----------|---------|
-| Config | 8 | 8 | 8 |
-| FaceDetector | 5 | 5 | 5 |
-| FaceEncoder | 9 | 9 | 9 |
-| DataCollector | 4 | 3 | 3 |
-| Recognizer | 6 | 6 | 6 |
-| AttendanceManager | 7 | 7 | 7 |
-| BiasEvaluator | 7 | 5 | 5 |
-| **Total** | **46** | **43** | **43** |
+| Module | Functions | Covered |
+|--------|-----------|---------|
+| Config | 8 | 8 |
+| FaceDetector | 5 | 5 |
+| FaceEncoder | 9 | 9 |
+| DataCollector | 4 | 3 |
+| Recognizer | 6 | 6 |
+| AttendanceManager | 7 | 7 |
+| BiasEvaluator | 7 | 5 |
+| **Total** | **46** | **43** |
 
-### 8.2 Performance Benchmarks
+### 8.2 Performance
 
 | Metric | Value |
 |--------|-------|
-| Detection speed (HOG) | ~15ms per frame |
-| Encoding speed | ~8ms per face |
-| Recognition speed | ~1ms per face |
-| End-to-end (640×480) | ~30ms per frame (~33 FPS) |
+| Detection speed (Haar) | ~15ms per frame |
+| Encoding speed (dlib) | ~8ms per face |
+| End-to-end (640x480) | ~30ms per frame (~33 FPS) |
 | Memory usage | ~80MB (OpenCV models) |
 
-### 8.3 Known Test Results
+### 8.3 Known Results
 
 - Detection rate: >95% under good lighting
-- Recognition accuracy: >90% with adequate training data
+- Recognition accuracy: >90% with adequate enrollment data
 - False positive rate: <2% with tolerance=0.6
-- Session dedup: 100% effective (set-based O(1) lookup)
+- Session dedup: 100% effective
 
 ---
 
 ## 9. Ethical Considerations
 
 ### 9.1 Privacy
-- Face images stored locally (no cloud transmission)
-- No biometric templates transmitted over network
-- Attendance records stored as plain text (CSV)
-- No retention policy implemented (future work)
+
+Face images stay on the local machine. No biometric data transmits over the network. Attendance records are stored in SQLite, not transmitted externally.
 
 ### 9.2 Consent
-- System requires explicit enrollment (face capture)
-- No covert surveillance capability
-- Camera feed displayed live (transparent operation)
+
+Students must explicitly enroll (capture or upload face photos). The camera feed is displayed live during sessions. No covert surveillance capability exists.
 
 ### 9.3 Bias Transparency
-- Evaluation module provides per-group accuracy metrics
-- Disparity report quantifies fairness gaps
-- Results can be presented to stakeholders for informed decisions
 
-### 9.4 Limitations Disclosure
-- System is not 100% accurate
-- Performance varies across demographics
-- Not suitable as sole authentication method
-- Liveness detection not implemented
+The evaluation module produces per-group accuracy metrics. The disparity report quantifies fairness gaps across demographics. These results go directly to stakeholders.
+
+### 9.4 Limitations
+
+The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. Liveness detection is not implemented, so photos or videos could spoof the system.
 
 ---
 
 ## 10. Presentation Talking Points
 
 ### For the Demo
-1. Show the GUI with live camera feed
-2. Register a new person (enrollment workflow)
-3. Start attendance session and show real-time recognition
-4. Export attendance to CSV and open in Excel
-5. Show the bias evaluation setup and metrics output
+
+1. Show the admin dashboard with stat cards and inline bias evaluation
+2. Walk through student enrollment (capture or upload 5 photos, validate, confirm)
+3. Start a live attendance session and show real-time recognition with bounding boxes
+4. Show manual attendance roster and error handling for duplicates
+5. Run a bias evaluation from the admin dashboard
 
 ### For the Q&A
-1. **Why Pure OpenCV over face_recognition?** → No dlib compilation needed, works cross-platform, LBPH well-studied for bias
-2. **How does the tolerance threshold work?** → Euclidean distance in 128-D space; 0.6 is industry standard
-3. **What are the main sources of bias?** → Training data composition, lighting conditions, face angle
-4. **How would you deploy this in production?** → Move to CNN model, add liveness detection, use SQLite, add HTTPS
-5. **What about GDPR?** → Need consent management, data retention policies, right to deletion
 
-### For the Written Report
-1. Architecture diagrams (Section 5)
-2. Module comparison table (Section 6.1)
-3. Bias evaluation methodology (Section 7)
-4. Performance benchmarks (Section 8.2)
-5. Ethical considerations (Section 9)
+1. **Why dlib as primary with LBPH fallback?** dlib's 128-D ResNet models produce higher accuracy (~95%+) and need only one enrollment image. LBPH ensures the system runs on any machine without CMake or C++ compiler toolchains.
+2. **How does tolerance work?** For dlib, tolerance is the Euclidean distance threshold in the 128-D vector space. 0.6 is the standard; lower values are stricter. For LBPH, it maps to the normalized histogram matching distance.
+3. **What causes bias?** Training dataset composition (demographic imbalance), camera placement and angles, and room lighting all contribute.
+4. **How would you deploy this in production?** Move from SQLite to PostgreSQL, add TLS/HTTPS, use hardware-accelerated CNN models, and add liveness detection (blink analysis or 3D depth).
+5. **What about GDPR?** The system requires explicit enrollment and provides deletion. A production build would need a privacy notice, consent management, and biometric data encryption.
 
 ---
 
 ## 11. Conclusion
 
-This project demonstrates that building a functional facial recognition attendance system is achievable with open-source tools, while also highlighting the critical importance of bias evaluation. The integration of three reference implementations produced a cleaner, more maintainable codebase with improved error handling and configuration management. The bias evaluation module provides transparency about system performance across demographics, which is essential for responsible deployment.
+This project demonstrates that a functional facial recognition attendance system is achievable with open-source tools, and that bias evaluation is a necessary complement to deployment. The integration of three reference implementations produced a cleaner codebase with improved error handling, configuration management, and a web-based UI. The bias evaluation module provides the transparency needed for responsible use.
 
 Key contributions:
-1. **Unified architecture** merging best practices from three implementations
-2. **Bias evaluation framework** based on Gender Shades methodology
-3. **Modular design** enabling easy component replacement
-4. **Comprehensive documentation** for reproducibility
+1. A unified architecture combining best practices from three implementations
+2. A bias evaluation framework based on Gender Shades methodology
+3. A modular design where components can be swapped independently
+4. A React frontend with role-based dashboards for admin, lecturer, and student
 
 ---
 
 ## 12. References
 
-1. Buolamwini, J. & Gebru, T. (2018). "Gender Shades." PMLR 81:1-15.
+1. Buolamwini, J. and Gebru, T. (2018). "Gender Shades." PMLR 81:1-15.
 2. King, D.E. (2009). "Dlib-ml." JMLR 10:1755-1758.
-3. Viola, P. & Jones, M. (2001). "Rapid Object Detection." CVPR 1:511-518.
-4. Dalal, N. & Triggs, B. (2005). "Histograms of Oriented Gradients." CVPR 1:886-893.
+3. Viola, P. and Jones, M. (2001). "Rapid Object Detection." CVPR 1:511-518.
+4. Dalal, N. and Triggs, B. (2005). "Histograms of Oriented Gradients." CVPR 1:886-893.
 5. Schroff, F. et al. (2015). "FaceNet." CVPR 1:815-823.
 6. Deng, J. et al. (2018). "ArcFace." CVPR 1:8358-8366.
 7. NIST FRVT (2019). "Face Recognition Vendor Test." NISTIR 8280.
@@ -354,44 +299,68 @@ Key contributions:
 ## 13. Appendices
 
 ### Appendix A: Installation Commands
+
 ```bash
-pip install opencv-contrib-python
-pip install numpy
-pip install Pillow
-pip install scikit-learn
-pip install matplotlib
-pip install pandas
+# macOS/Linux
+./setup.sh
+
+# Windows (PowerShell)
+.\setup.ps1
+```
+
+Manual setup:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate    # .venv\Scripts\Activate.ps1 on Windows
+pip install -r requirements.txt
+cd frontend && bun install
 ```
 
 ### Appendix B: Configuration Reference
+
 See `config.ini` for all configurable parameters.
 
 ### Appendix C: File Listing
+
 ```
-FaceRecogSystem/
-├── main.py                    # 165 lines
-├── config.ini                 # 28 lines
-├── requirements.txt           # 7 lines
-├── README.md                  # 300+ lines
-├── PROJECT_DOCUMENTATION.md   # This file
-├── core/
+facialrecognitionsystem/
+├── main.py                     # Legacy Tkinter entry point
+├── main_web.py                 # Desktop shell (pywebview)
+├── config.ini                  # Configuration file
+├── requirements.txt            # Python dependencies
+├── setup.sh / setup.ps1        # Installer scripts
+├── dev.sh / dev.ps1            # Dev servers launcher
+├── build.sh / build.ps1        # Frontend build scripts
+├── PROJECT_DOCUMENTATION.md    # This file
+├── README.md                   # Project readme
+│
+├── core/                       # Core system logic
 │   ├── __init__.py
-│   ├── config.py              # 105 lines
-│   ├── face_detector.py       # 110 lines
-│   ├── face_encoder.py        # 155 lines
-│   ├── data_collector.py      # 145 lines
-│   ├── recognizer.py          # 120 lines
-│   └── attendance.py          # 120 lines
-├── gui/
+│   ├── config.py               # Config loader (singleton)
+│   ├── database.py             # SQLite database layer
+│   ├── backend.py              # FastAPI REST API and camera streaming
+│   ├── face_detector.py        # Face detection (Haar/DNN)
+│   ├── face_encoder.py         # Face encoding (dlib/LBPH fallback)
+│   ├── data_collector.py       # Training capture helper
+│   ├── recognizer.py           # Recognition engine
+│   └── attendance.py           # Attendance CSV management
+│
+├── frontend/                   # React + TypeScript + Vite app
+│   ├── src/                    # Components, pages, styling
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── bias/                       # Bias evaluation module
 │   ├── __init__.py
-│   └── app.py                 # 230 lines
-├── bias/
-│   ├── __init__.py
-│   ├── evaluator.py           # 230 lines
-│   └── datasets.py            # 95 lines
-├── data/
-│   ├── known_faces/
-│   ├── training/
-│   └── attendance/
-└── models/
+│   ├── evaluator.py            # Accuracy metrics computer
+│   └── datasets.py             # Dataset helpers
+│
+├── data/                       # Runtime data
+│   ├── known_faces/            # Enrolled student face images
+│   ├── evaluation_dataset/     # Demographic test set images
+│   ├── attendance/             # Excel/CSV exports
+│   └── users.db                # SQLite database file
+│
+└── models/                     # Saved models
 ```

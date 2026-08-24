@@ -7,8 +7,8 @@ if (-not (Test-Path ".venv")) {
     python -m venv .venv
 }
 . .\.venv\Scripts\Activate.ps1
-pip install --upgrade pip -q
-pip install -r requirements.txt
+python -m pip install --upgrade pip -q
+python -m pip install -r requirements.txt
 
 Write-Host "==> Frontend (frontend/)"
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {

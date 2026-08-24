@@ -23,10 +23,25 @@ class FaceDetector:
         self._dnn_proto = None
 
         if model == "haar":
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+            cascade_path = self._find_haar_cascade()
             self._haar_cascade = cv2.CascadeClassifier(cascade_path)
         elif model == "dnn":
             self._init_dnn()
+
+    @staticmethod
+    def _find_haar_cascade() -> str:
+        """Locate the haar cascade XML, checking multiple paths."""
+        name = "haarcascade_frontalface_default.xml"
+        candidates = [
+            cv2.data.haarcascades + name,
+            os.path.join(os.path.dirname(__file__), name),
+            os.path.join(os.path.dirname(os.path.dirname(__file__)), "models", name),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        # Last resort — return the default path (will raise if truly missing)
+        return cv2.data.haarcascades + name
 
     def _init_dnn(self):
         """Initialize DNN face detector with OpenCV's pre-trained model."""

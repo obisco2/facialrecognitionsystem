@@ -17,11 +17,13 @@ export const NAV_BY_ROLE: Record<Role, NavItem[]> = {
   ],
   lecturer: [
     { id: 'dashboard', label: 'Dashboard', to: '/lecturer', icon: 'LayoutDashboard' },
+    { id: 'classes', label: 'Classes', to: '/lecturer/classes', icon: 'BookOpen' },
     { id: 'live', label: 'Live session', to: '/lecturer/live', icon: 'Video' },
     { id: 'history', label: 'History', to: '/lecturer/history', icon: 'History' },
   ],
   student: [
     { id: 'dashboard', label: 'Dashboard', to: '/student', icon: 'LayoutDashboard' },
     { id: 'enrollment', label: 'Enrollment', to: '/student/enrollment', icon: 'ScanFace' },
+    { id: 'settings', label: 'Settings', to: '/student/settings', icon: 'Settings' },
   ],
 }
