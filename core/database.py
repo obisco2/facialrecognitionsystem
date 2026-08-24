@@ -157,6 +157,8 @@ class DatabaseManager:
         Raises:
             ValueError: If username already exists.
         """
+        if full_name:
+            full_name = full_name.strip()
         try:
             with self._conn:
                 cur = self._conn.execute(
@@ -204,8 +206,9 @@ class DatabaseManager:
 
     def get_user_by_name(self, full_name: str) -> dict | None:
         """Look up a user by their full name (used after face recognition)."""
+        full_name = full_name.strip()
         row = self._conn.execute(
-            "SELECT * FROM users WHERE full_name = ? AND role = 'student'",
+            "SELECT * FROM users WHERE TRIM(full_name) = ? AND role = 'student'",
             (full_name,),
         ).fetchone()
         return self._row_to_dict(row)
@@ -235,6 +238,8 @@ class DatabaseManager:
         """
         allowed = {"username", "role", "full_name", "student_id", "email", "face_enrolled"}
         updates = {k: v for k, v in fields.items() if k in allowed}
+        if "full_name" in updates and updates["full_name"]:
+            updates["full_name"] = updates["full_name"].strip()
         if not updates:
             return False
         cols = ", ".join(f"{k} = ?" for k in updates)
