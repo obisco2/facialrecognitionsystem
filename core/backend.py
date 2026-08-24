@@ -4,6 +4,8 @@ import time
 import asyncio
 import logging
 import threading
+import base64
+import numpy as np
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -286,6 +288,9 @@ class ConfigSaveRequest(BaseModel):
     recognition_engine: str
     stream_url: str
 
+class RecognizeFrameRequest(BaseModel):
+    frame: str  # base64 encoded JPEG
+
 # --- Endpoints ---
 
 @app.post("/api/auth/login")
@@ -459,6 +464,53 @@ def video_feed():
             "X-Accel-Buffering": "no",
         },
     )
+
+# --- Browser-based Recognition Endpoint ---
+
+@app.post("/api/recognize/frame")
+def recognize_frame(req: RecognizeFrameRequest):
+    """Accept a base64 JPEG frame from the browser, run face detection + recognition, return results."""
+    try:
+        # Decode base64 JPEG
+        img_bytes = base64.b64decode(req.frame)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to decode frame: {e}")
+
+    # Run face detection + recognition
+    det = FaceDetector(model="haar")
+    enc = FaceEncoder(engine=config.recognition_engine, tolerance=config.tolerance)
+    enc.load_known_faces(config.known_faces_dir)
+    recognizer = Recognizer(det, enc)
+
+    scale = config.frame_scale
+    locations, names, distances = recognizer.process_frame(frame, scale)
+
+    # Build results
+    recognized = []
+    for (top, right, bottom, left), name, dist in zip(locations, names, distances):
+        is_known = (name != "Unknown")
+        recognized.append({
+            "name": name if is_known else None,
+            "confidence": round(dist, 4) if dist is not None else None,
+            "is_known": is_known,
+            "box": {
+                "top": int(top / scale),
+                "right": int(right / scale),
+                "bottom": int(bottom / scale),
+                "left": int(left / scale),
+            },
+        })
+
+    return {
+        "recognized": recognized,
+        "total_faces": len(recognized),
+        "known_faces": sum(1 for r in recognized if r["is_known"]),
+        "unknown_faces": sum(1 for r in recognized if not r["is_known"]),
+    }
 
 # --- Face Enrollment Endpoints ---
 

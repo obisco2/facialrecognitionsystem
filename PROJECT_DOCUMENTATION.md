@@ -9,7 +9,7 @@
 
 ## 2. Abstract
 
-This project builds a facial recognition attendance system with bias evaluation across demographic groups. It uses OpenCV's Haar Cascade for face detection and two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). A FastAPI backend serves a React frontend with live camera feeds, automatic attendance logging, and student enrollment. The bias evaluation module applies the Gender Shades methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories. The codebase merges strengths from three open-source reference implementations into a single, maintainable system.
+This project builds a facial recognition attendance system with bias evaluation across demographic groups. It uses OpenCV's Haar Cascade for face detection and two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). A FastAPI backend serves a React frontend where the browser captures video via WebRTC (`getUserMedia`) and sends frames to the backend for recognition. This architecture eliminates the need for a server-side camera, enabling deployment on headless VPS instances. The bias evaluation module applies the Gender Shades methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories.
 
 ---
 
@@ -59,12 +59,14 @@ Buolamwini and Gebru (2018) showed that commercial face recognition systems have
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   Presentation Layer                     │
-│         React + TypeScript (Tailwind CSS v4)             │
-│         Role-scoped routes: admin / lecturer / student   │
+│                   Browser (Client)                        │
+│  getUserMedia → Canvas → Base64 JPEG → POST /recognize   │
+│  React + TypeScript (Tailwind CSS v4)                     │
+│  Role-scoped routes: admin / lecturer / student           │
 ├─────────────────────────────────────────────────────────┤
 │                    API Layer                              │
-│              FastAPI REST + MJPEG streaming               │
+│              FastAPI REST + Frame Recognition              │
+│              POST /api/recognize/frame (stateless)        │
 ├─────────────────────────────────────────────────────────┤
 │                    Core Engine                            │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐        │
@@ -105,11 +107,12 @@ frontend/ (React + TypeScript + Vite)
 ### 5.3 Data Flow
 
 ```
-Webcam → Frame Capture → Downscale (25%) → Face Detection (Haar/DNN)
-  → Face Encoding (128-D dlib or LBPH template)
+Browser getUserMedia → Canvas Capture → Base64 JPEG
+  → POST /api/recognize/frame → Decode JPEG → Downscale (25%)
+  → Face Detection (Haar/DNN) → Face Encoding (128-D dlib or LBPH)
   → Euclidean Distance Match Against Known Faces
   → Identity + Confidence → SQLite Attendance Log
-  → MJPEG Stream → React Frontend (bounding boxes + names)
+  → JSON Response → React Frontend (bounding boxes + names)
 ```
 
 ---
@@ -123,6 +126,7 @@ Webcam → Frame Capture → Downscale (25%) → Face Detection (Haar/DNN)
 | Face Detection | Haar Cascade | dlib HOG | dlib HOG | **Haar/DNN (configurable)** |
 | Recognition | LBPH | 128-D encoding | 128-D encoding | **128-D + LBPH fallback** |
 | GUI | Tkinter | None | Tkinter | **React + TypeScript** |
+| Camera Source | Local webcam | Local webcam | Local webcam | **Browser getUserMedia** |
 | Threading | No | No | Yes | **Yes** |
 | Config File | No | No | INI | **INI (singleton)** |
 | Session Dedup | No | CSV read | Set-based | **Set + DB constraint** |
@@ -142,12 +146,12 @@ Webcam → Frame Capture → Downscale (25%) → Face Detection (Haar/DNN)
 | `core/data_collector.py` | 138 | Training data capture |
 | `core/recognizer.py` | 124 | Recognition engine |
 | `core/database.py` | 609 | SQLite database layer |
-| `core/backend.py` | 796 | FastAPI backend and camera streaming |
+| `core/backend.py` | ~950 | FastAPI backend + frame recognition |
 | `core/attendance.py` | 129 | Attendance CSV management |
 | `bias/evaluator.py` | 244 | Bias evaluation metrics |
 | `bias/datasets.py` | 106 | Dataset helpers |
-| **Total (Python)** | **~2,850** | |
-| **Total (TypeScript)** | **~3,000** | React frontend |
+| **Total (Python)** | **~3,000** | |
+| **Total (TypeScript)** | **~3,200** | React frontend (browser camera) |
 
 ### 6.3 Key Algorithms
 

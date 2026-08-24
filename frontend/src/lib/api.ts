@@ -176,6 +176,22 @@ export const stopSession = () => post<{ status: string }>('/session/stop')
 export const getLiveSession = () => get<LiveSessionState>('/session/live')
 export const videoFeedUrl = '/api/session/video_feed'
 
+// --- Browser-based recognition ---
+export interface RecognizeResult {
+  name: string | null
+  confidence: number | null
+  is_known: boolean
+  box: { top: number; right: number; bottom: number; left: number }
+}
+export interface RecognizeFrameResponse {
+  recognized: RecognizeResult[]
+  total_faces: number
+  known_faces: number
+  unknown_faces: number
+}
+export const recognizeFrame = (frameBase64: string) =>
+  post<RecognizeFrameResponse>('/recognize/frame', { frame: frameBase64 })
+
 // --- Enrollment ---
 export const startEnrollment = (userId: number, fullName: string, cameraSource?: string) => {
   const q = new URLSearchParams({ user_id: String(userId), full_name: fullName })

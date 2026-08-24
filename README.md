@@ -6,9 +6,9 @@ A facial recognition attendance system that measures its own bias across skin to
 
 ## What It Does
 
-Students enroll by capturing or uploading 5 face photos. Lecturers start live sessions where a webcam identifies students in real time and logs attendance automatically. The admin dashboard shows system stats, manages users and classes, and runs bias evaluations using the Gender Shades methodology.
+Students enroll by capturing or uploading 5 face photos via their browser camera. Lecturers start live sessions where the browser identifies students in real time using WebRTC (`getUserMedia`) and logs attendance automatically. The admin dashboard shows system stats, manages users and classes, and runs bias evaluations using the Gender Shades methodology.
 
-The system ships with two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). If dlib fails to install, the system degrades to LBPH without crashing.
+The system ships with two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). If dlib fails to install, the system degrades to LBPH without crashing. The browser-based camera architecture means the backend runs on any headless VPS without a physical webcam.
 
 ---
 
@@ -19,7 +19,7 @@ The system ships with two recognition engines: dlib's 128-D ResNet encoder (prim
 - Python 3.10+
 - C++ compiler + CMake (for dlib; optional if using LBPH only)
 - [Bun](https://bun.sh) (for the React frontend)
-- A webcam
+- A webcam (any modern browser supports WebRTC)
 
 ### Setup
 
@@ -67,11 +67,13 @@ python main.py
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                   React Frontend                         │
-│         Role-scoped routes: admin / lecturer / student   │
+│                   Browser (Client)                        │
+│  getUserMedia → Canvas → Base64 JPEG → POST /recognize   │
+│  React + TypeScript (Tailwind CSS v4)                     │
 ├─────────────────────────────────────────────────────────┤
 │                  FastAPI Backend                          │
-│           REST API + MJPEG camera streaming               │
+│           REST API + Frame Recognition                    │
+│           POST /api/recognize/frame (stateless)           │
 ├─────────────────────────────────────────────────────────┤
 │                    Core Engine                            │
 │  FaceDetector (Haar/DNN) ──▶ FaceEncoder (dlib/LBPH)   │
@@ -214,9 +216,9 @@ dlib's 128-D ResNet encoder produces ~95%+ accuracy and needs one enrollment ima
 
 A single-file database suits a final year project. It handles users, classes, enrollments, and attendance without running a database server. The schema enforces constraints (unique attendance per student per class per day) that prevent duplicates at the database level.
 
-### Why MJPEG Streaming?
+### Why Browser-Based Camera?
 
-The backend reads frames from the webcam, runs face detection and encoding, draws bounding boxes, and serves the annotated frame as an MJPEG stream. The React frontend displays it in an `<img>` tag. No WebRTC, no WebSocket, no external streaming service.
+The browser captures video via WebRTC (`getUserMedia`), extracts frames to a canvas, sends base64 JPEGs to `POST /api/recognize/frame`, and the backend returns recognized faces as JSON. This eliminates the need for a server-side camera, enabling deployment on headless VPS instances. The backend processes frames statelessly, so no MJPEG stream or WebSocket is required.
 
 ---
 
@@ -225,7 +227,8 @@ The backend reads frames from the webcam, runs face detection and encoding, draw
 - Frontal faces only. The Haar cascade detector struggles with profiles and heavy occlusion.
 - No liveness detection. A photo or video of an enrolled person could fool the system.
 - Lighting sensitivity. Performance drops in poor lighting or strong backlight.
-- No GPU acceleration by default. The DNN detector option exists but is not the default.
+- Browser camera permissions. Users must grant camera access in their browser.
+- Frame latency. Browser-to-backend round trip adds ~100-250ms per frame.
 
 ---
 

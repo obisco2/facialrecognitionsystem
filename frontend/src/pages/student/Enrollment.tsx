@@ -1,18 +1,14 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Camera, Check, Trash2, ShieldCheck, CheckCircle2, Upload } from 'lucide-react'
+import { Camera, Check, Trash2, ShieldCheck, CheckCircle2, Upload, CameraOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   startEnrollment,
-  captureEnrollmentSlot,
-  deleteEnrollmentSlot,
+  uploadEnrollment,
   validateEnrollment,
   confirmEnrollment,
-  uploadEnrollment,
-  enrollmentCaptureUrl,
-  videoFeedUrl,
   type EnrollmentSlotResult,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -24,19 +20,75 @@ export default function StudentEnrollment() {
   const { user, setUser } = useAuth()
   const navigate = useNavigate()
   const fileRef = useRef<HTMLInputElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
   const [started, setStarted] = useState(false)
   const [captured, setCaptured] = useState<Record<number, boolean>>({})
   const [previews, setPreviews] = useState<Record<number, string>>({})
   const [results, setResults] = useState<EnrollmentSlotResult[] | null>(null)
   const [canProceed, setCanProceed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
+  const [cameraActive, setCameraActive] = useState(false)
 
   if (!user) return null
+
+  // Start browser camera
+  const startCamera = useCallback(async () => {
+    setCameraError(null)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' },
+      })
+      streamRef.current = stream
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream
+        await videoRef.current.play()
+        setCameraActive(true)
+      }
+    } catch (err) {
+      setCameraError(err instanceof Error ? err.message : 'Camera access denied')
+      setCameraActive(false)
+    }
+  }, [])
+
+  // Stop browser camera
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    setCameraActive(false)
+  }, [])
+
+  // Capture frame from browser camera
+  const captureFrame = useCallback((): string | null => {
+    if (!videoRef.current || !canvasRef.current || !cameraActive) return null
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(video, 0, 0)
+    return canvas.toDataURL('image/jpeg', 0.95).split(',')[1]
+  }, [cameraActive])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
+    }
+  }, [])
 
   async function handleStart() {
     setBusy(true)
     try {
       await startEnrollment(user!.id, user!.full_name)
+      await startCamera()
       setStarted(true)
     } finally {
       setBusy(false)
@@ -44,25 +96,40 @@ export default function StudentEnrollment() {
   }
 
   async function handleCapture(idx: number) {
-    await captureEnrollmentSlot(user!.id, user!.full_name, idx)
-    setCaptured((c) => ({ ...c, [idx]: true }))
-    setResults(null)
-    // Fetch the captured image directly from the saved file
+    // Capture frame from browser camera and upload
+    const base64 = captureFrame()
+    if (!base64) {
+      setCameraError('Camera not ready. Please wait a moment.')
+      return
+    }
+
+    // Convert base64 to File and upload
+    const byteString = atob(base64)
+    const ab = new ArrayBuffer(byteString.length)
+    const ia = new Uint8Array(ab)
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i)
+    }
+    const blob = new Blob([ab], { type: 'image/jpeg' })
+    const file = new File([blob], `capture_${idx}.jpg`, { type: 'image/jpeg' })
+
+    setBusy(true)
     try {
-      const res = await fetch(enrollmentCaptureUrl(user!.id, idx))
-      if (res.ok) {
-        const blob = await res.blob()
-        const url = URL.createObjectURL(blob)
-        setPreviews((p) => ({ ...p, [idx]: url }))
-      }
-    } catch {
-      // Preview not critical — slot still marked as captured
+      await uploadEnrollment(user!.id, [file])
+      setCaptured((c) => ({ ...c, [idx]: true }))
+      setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(blob) }))
+      setResults(null)
+    } finally {
+      setBusy(false)
     }
   }
 
   async function handleDelete(idx: number) {
-    await deleteEnrollmentSlot(user!.id, idx)
-    setCaptured((c) => ({ ...c, [idx]: false }))
+    setCaptured((c) => {
+      const next = { ...c }
+      delete next[idx]
+      return next
+    })
     setPreviews((p) => {
       const next = { ...p }
       if (next[idx]) URL.revokeObjectURL(next[idx])
@@ -104,6 +171,7 @@ export default function StudentEnrollment() {
       setBusy(true)
       try {
         await startEnrollment(user!.id, user!.full_name)
+        await startCamera()
         setStarted(true)
       } finally {
         setBusy(false)
@@ -128,6 +196,7 @@ export default function StudentEnrollment() {
   async function handleConfirm() {
     setBusy(true)
     try {
+      stopCamera()
       await confirmEnrollment(user!.id, user!.full_name)
       setUser({ ...user!, face_enrolled: 1 })
       navigate('/student')
@@ -144,6 +213,7 @@ export default function StudentEnrollment() {
       setPreviews({})
       setResults(null)
       setCanProceed(false)
+      await startCamera()
       setStarted(true)
     } finally {
       setBusy(false)
@@ -209,12 +279,30 @@ export default function StudentEnrollment() {
       ) : (
         <div className="flex flex-1 flex-col gap-4 overflow-hidden rounded-[var(--radius-lg)] bg-graphite p-4">
           {/* Camera feed */}
-          <div className="min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
-            <img
-              src={videoFeedUrl}
-              alt="Enrollment camera feed"
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
               className="h-full w-full object-contain"
             />
+            <canvas ref={canvasRef} className="hidden" />
+
+            {/* Camera error overlay */}
+            {cameraError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80">
+                <CameraOff className="mb-2 size-8 text-danger" />
+                <p className="text-sm text-danger">{cameraError}</p>
+              </div>
+            )}
+
+            {/* Capture indicator */}
+            {busy && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                <div className="size-8 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              </div>
+            )}
           </div>
 
           {/* Slots with previews */}
