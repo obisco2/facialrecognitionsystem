@@ -118,6 +118,7 @@ UNIT
 sudo systemctl daemon-reload
 sudo systemctl enable --now attendiq
 
+sudo mkdir -p /etc/caddy
 sudo tee /etc/caddy/Caddyfile > /dev/null << 'CADDY'
 attendiq.tadstech.dev {
     root * /var/www/attendiq/frontend
