@@ -9,10 +9,10 @@ if [ ! -f /swapfile ]; then
     sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+    sudo swapon /swapfile || echo "WARNING: Failed to enable swap. This is expected on ZFS/LXC containers. Continuing..."
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab || true
     echo "Swap enabled:"
-    free -h
+    free -h || true
 else
     echo "[1/7] Swap already exists"
     sudo swapon --show
