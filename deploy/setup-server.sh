@@ -64,17 +64,36 @@ sudo cp -r dist /var/www/attendiq/frontend
 sudo chown -R www-data:www-data /var/www/attendiq/frontend
 
 # --- Python venv + deps ---
-echo "[6/7] Installing Python dependencies (with swap for dlib)..."
+echo "[6/7] Installing Python dependencies..."
 cd /var/www/attendiq/repo
 sudo chown -R www-data:www-data .
 if [ ! -d ".venv" ]; then
     sudo -u www-data python3 -m venv .venv
 fi
 sudo -u www-data .venv/bin/pip install --upgrade pip
-sudo -u www-data .venv/bin/pip install setuptools'<81'
-sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
-# Force single-threaded compilation to prevent OOM on 2GB RAM VPS
-sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install -r requirements.txt
+
+# Auto-detect resource constraints to avoid compiler OOM crashes
+FREE_MEM=$(free -m | awk '/^Mem:/{print $2}')
+HAS_SWAP=$(free -m | awk '/^Swap:/{print $2}')
+if [ "$HAS_SWAP" -eq 0 ] && [ "$FREE_MEM" -lt 3000 ]; then
+    echo "WARNING: Low RAM (${FREE_MEM}MB) and no swap detected."
+    echo "Configuring in LBPH-only mode to prevent dlib compilation memory crashes..."
+    
+    # Strip face_recognition/dlib from requirements
+    sudo -u www-data grep -E -v 'face_recognition|face_recognition_models|setuptools' requirements.txt > requirements-vps.txt
+    sudo -u www-data .venv/bin/pip install -r requirements-vps.txt
+    
+    # Force LBPH recognition engine in configuration
+    if [ -f config.ini ]; then
+        sudo -u www-data sed -i 's/ENGINE = auto/ENGINE = lbph/g' config.ini
+        sudo -u www-data sed -i 's/ENGINE = dlib/ENGINE = lbph/g' config.ini
+    fi
+else
+    sudo -u www-data .venv/bin/pip install setuptools'<81'
+    sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
+    # Force single-threaded compilation to prevent OOM
+    sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install -r requirements.txt
+fi
 
 # --- Systemd + Caddy ---
 echo "[7/7] Configuring services..."
