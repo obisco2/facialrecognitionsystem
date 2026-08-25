@@ -73,7 +73,8 @@ fi
 sudo -u www-data .venv/bin/pip install --upgrade pip
 sudo -u www-data .venv/bin/pip install setuptools'<81'
 sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
-sudo -u www-data .venv/bin/pip install -r requirements.txt
+# Force single-threaded compilation to prevent OOM on 2GB RAM VPS
+sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install -r requirements.txt
 
 # --- Systemd + Caddy ---
 echo "[7/7] Configuring services..."
