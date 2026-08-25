@@ -38,7 +38,16 @@ if [ -d /var/www/attendiq/repo/.git ]; then
     cd /var/www/attendiq/repo
     sudo -u www-data git pull
 else
-    sudo git clone git@github.com:TADSTech/facialrecognitionsystem.git /var/www/attendiq/repo
+    # Find active local repository to copy from, otherwise clone via HTTPS
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_DIR="$(dirname "$SCRIPT_DIR")"
+    if [ -d "$REPO_DIR/.git" ]; then
+        echo "Copying from local path: $REPO_DIR"
+        sudo cp -r "$REPO_DIR" /var/www/attendiq/repo
+    else
+        echo "Cloning from GitHub via HTTPS..."
+        sudo git clone https://github.com/TADSTech/facialrecognitionsystem.git /var/www/attendiq/repo
+    fi
     sudo chown -R www-data:www-data /var/www/attendiq/repo
 fi
 
