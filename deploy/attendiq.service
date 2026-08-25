@@ -1,0 +1,15 @@
+[Unit]
+Description=AttendIQ Backend API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/attendiq/backend
+ExecStart=/var/www/attendiq/backend/.venv/bin/python -m uvicorn core.backend:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
