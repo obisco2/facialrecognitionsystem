@@ -6,7 +6,7 @@ echo "=== AttendIQ Final Setup (run after server reboot) ==="
 # --- Add 2GB swap to prevent OOM during dlib compilation ---
 if [ ! -f /swapfile ]; then
     echo "[1/7] Creating 2GB swap file..."
-    sudo fallocate -l 2G /swapfile
+    sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
     sudo chmod 600 /swapfile
     sudo mkswap /swapfile
     sudo swapon /swapfile
