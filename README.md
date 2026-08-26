@@ -220,6 +220,13 @@ A single-file database suits a final year project. It handles users, classes, en
 
 The browser captures video via WebRTC (`getUserMedia`), extracts frames to a canvas, sends base64 JPEGs to `POST /api/recognize/frame`, and the backend returns recognized faces as JSON. This eliminates the need for a server-side camera, enabling deployment on headless VPS instances. The backend processes frames statelessly, so no MJPEG stream or WebSocket is required.
 
+### VPS Deployment Optimization (dlib-bin, Caddy, & Caching)
+
+Running computer vision models in resource-constrained cloud servers (e.g. 2GB RAM container on Hack Club Nest) required three key modifications:
+*   **Compilation Avoidance**: We configure Python on Linux to load `dlib-bin` (a precompiled wheel) and build `face_recognition` with the `--no-deps` flag to bypass C++ compilation resource exhaustion.
+*   **SSL Delegation**: Caddy is configured for internal HTTP (`http://`) to delegate SSL certificate termination to the Nest host proxy, solving ACME handshake blocks.
+*   **Recognizer Caching**: The backend caches the `Recognizer` instance in memory on start and invalidates it only when user rosters are modified. This avoids concurrent disk reads/loads per frame, dramatically reducing CPU overhead and eliminating Segmentation Fault (SEGV) process crashes.
+
 ---
 
 ## Known Limitations

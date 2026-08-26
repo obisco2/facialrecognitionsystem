@@ -254,9 +254,25 @@ The evaluation module produces per-group accuracy metrics. The disparity report 
 
 The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. Liveness detection is not implemented, so photos or videos could spoof the system.
 
+## 10. Real-World Cloud Deployment (VPS Challenges & Solutions)
+
+Deploying AttendIQ to a cloud container environment (e.g., Hack Club Nest) revealed critical engineering requirements for running real-time computer vision in resource-constrained cloud server hosts:
+
+### 10.1 Memory-Constraint Compilation Avoidance
+Headless Linux VPS containers often run with limited memory (e.g., 2GB RAM). Installing Python dependencies that compile C++ code (like `dlib` from source) triggers compiler pipelines that exhaust all system memory, causing hard OOM crashes.
+*   **Resolution**: Configured a conditional dependency on `dlib-bin` for Linux platforms in `requirements.txt`. The server setup script executes the `face_recognition` installation using the `--no-deps` flag to bypass the local compilation stage entirely. The required system runtime libraries (`libopenblas-dev`, `libgl1`, and `libglib2.0-0`) are installed via the server's package manager.
+
+### 10.2 Shared Host Domain Mapping & Reverse Proxying
+Behind a shared host IP, the Proxmox/LXC server blocks direct inbound ports 80/443. Traffic is routed using subdomain CNAME mappings pointing to the host's proxy (`tads.hackclub.app`).
+*   **Resolution**: Configured the Caddyfile in HTTP mode (`http://`) to delegate SSL termination to the Nest host proxy. This prevents ACME TLS handshake errors inside the container while ensuring secure external access.
+
+### 10.3 Core Processing Performance and SegFault Mitigation
+Running real-time image evaluation calls (`/api/recognize/frame`) in rapid succession could segfault (SEGV) the uvicorn process due to race conditions from reloading dlib weights and the face image database on every frame request.
+*   **Resolution**: Refactored the backend to use a globally cached `Recognizer` instance in memory. It lazy-loads once on startup and only invalidates when a new student confirms enrollment or a user triggers a retraining process. This prevents concurrent disk I/O, boosts request processing, and eliminates Segmentation Fault crashes under load.
+
 ---
 
-## 10. Presentation Talking Points
+## 11. Presentation Talking Points
 
 ### For the Demo
 
@@ -276,7 +292,7 @@ The system is not 100% accurate. Performance varies across demographics. It cann
 
 ---
 
-## 11. Conclusion
+## 12. Conclusion
 
 This project demonstrates that a functional facial recognition attendance system is achievable with open-source tools, and that bias evaluation is a necessary complement to deployment. The integration of three reference implementations produced a cleaner codebase with improved error handling, configuration management, and a web-based UI. The bias evaluation module provides the transparency needed for responsible use.
 
@@ -288,7 +304,7 @@ Key contributions:
 
 ---
 
-## 12. References
+## 13. References
 
 1. Buolamwini, J. and Gebru, T. (2018). "Gender Shades." PMLR 81:1-15.
 2. King, D.E. (2009). "Dlib-ml." JMLR 10:1755-1758.
@@ -300,7 +316,7 @@ Key contributions:
 
 ---
 
-## 13. Appendices
+## 14. Appendices
 
 ### Appendix A: Installation Commands
 
