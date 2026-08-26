@@ -82,6 +82,9 @@ else
     sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install dlib
 fi
 
+# Install face_recognition with --no-deps to prevent it from pulling and compiling dlib
+sudo -u www-data .venv/bin/pip install --no-deps face_recognition
+
 sudo -u www-data .venv/bin/pip install setuptools'<81'
 sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
 sudo -u www-data .venv/bin/pip install -r requirements.txt
