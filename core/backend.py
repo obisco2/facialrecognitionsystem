@@ -255,6 +255,24 @@ class CameraStreamer:
 
 streamer = CameraStreamer()
 
+global_recognizer = None
+
+def get_recognizer():
+    global global_recognizer
+    if streamer.running and streamer.recognizer:
+        return streamer.recognizer
+    if global_recognizer is None:
+        logger.info("Initializing global recognizer...")
+        det = FaceDetector(model="haar")
+        enc = FaceEncoder(engine=config.recognition_engine, tolerance=config.tolerance)
+        enc.load_known_faces(config.known_faces_dir)
+        global_recognizer = Recognizer(det, enc)
+    return global_recognizer
+
+def invalidate_global_recognizer():
+    global global_recognizer
+    global_recognizer = None
+
 # --- Request / Response Models ---
 class LoginRequest(BaseModel):
     username: str
@@ -488,11 +506,8 @@ def recognize_frame(req: RecognizeFrameRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode frame: {e}")
 
-    # Run face detection + recognition
-    det = FaceDetector(model="haar")
-    enc = FaceEncoder(engine=config.recognition_engine, tolerance=config.tolerance)
-    enc.load_known_faces(config.known_faces_dir)
-    recognizer = Recognizer(det, enc)
+    # Run face detection + recognition using the cached global recognizer
+    recognizer = get_recognizer()
 
     scale = config.frame_scale
     locations, names, distances = recognizer.process_frame(frame, scale)
@@ -787,6 +802,7 @@ def confirm_enrollment(user_id: int, full_name: str):
     except Exception as e:
         logger.error("Failed to pickle and save face encoding to students table: %s", str(e))
 
+    invalidate_global_recognizer()
     return {"status": "ok"}
 
 # --- Config & System Endpoints ---
@@ -900,6 +916,7 @@ def retrain_student_model(user_id: int, full_name: str):
     try:
         enc = FaceEncoder(engine=config.recognition_engine)
         enc.load_known_faces(config.known_faces_dir)
+        invalidate_global_recognizer()
         return {"status": "ok"}
     except Exception as e:
         logger.error("Retrain failed for user %s: %s", user_id, e)
