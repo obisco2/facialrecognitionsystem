@@ -114,14 +114,6 @@ sudo systemctl enable --now attendiq
 
 sudo mkdir -p /etc/caddy
 sudo tee /etc/caddy/Caddyfile > /dev/null << 'CADDY'
-{
-    log {
-        output file /var/log/caddy_error.log {
-            roll_size 10mb
-            roll_keep 5
-        }
-    }
-}
 
 http://attendiq.tadstech.dev {
     root * /var/www/attendiq/frontend
