@@ -132,16 +132,6 @@ http://attendiq-api.tadstech.dev {
     request_body {
         max_size 50MB
     }
-    header {
-        Access-Control-Allow-Origin https://attendiq.tadstech.dev
-        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-        Access-Control-Allow-Headers "Content-Type, Authorization"
-        Access-Control-Allow-Credentials true
-    }
-    @options method OPTIONS
-    handle @options {
-        respond 204
-    }
     encode gzip
 }
 CADDY
