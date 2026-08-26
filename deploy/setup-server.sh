@@ -72,28 +72,19 @@ if [ ! -d ".venv" ]; then
 fi
 sudo -u www-data .venv/bin/pip install --upgrade pip
 
-# Auto-detect resource constraints to avoid compiler OOM crashes
-FREE_MEM=$(free -m | awk '/^Mem:/{print $2}')
-HAS_SWAP=$(free -m | awk '/^Swap:/{print $2}')
-if [ "$HAS_SWAP" -eq 0 ] && [ "$FREE_MEM" -lt 3000 ]; then
-    echo "WARNING: Low RAM (${FREE_MEM}MB) and no swap detected."
-    echo "Configuring in LBPH-only mode to prevent dlib compilation memory crashes..."
-    
-    # Strip face_recognition/dlib from requirements
-    sudo -u www-data grep -E -v 'face_recognition|face_recognition_models|setuptools' requirements.txt > requirements-vps.txt
-    sudo -u www-data .venv/bin/pip install -r requirements-vps.txt
-    
-    # Force LBPH recognition engine in configuration
-    if [ -f config.ini ]; then
-        sudo -u www-data sed -i 's/ENGINE = auto/ENGINE = lbph/g' config.ini
-        sudo -u www-data sed -i 's/ENGINE = dlib/ENGINE = lbph/g' config.ini
-    fi
+# Try installing precompiled dlib wheel (dlib-bin) first to bypass compilation entirely
+echo "Installing precompiled dlib binary..."
+if sudo -u www-data .venv/bin/pip install dlib-bin; then
+    echo "Precompiled dlib-bin installed successfully."
 else
-    sudo -u www-data .venv/bin/pip install setuptools'<81'
-    sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
+    echo "dlib-bin install failed or not available. Falling back to source compilation..."
     # Force single-threaded compilation to prevent OOM
-    sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install -r requirements.txt
+    sudo -u www-data MAKEFLAGS="-j1" CMAKE_BUILD_PARALLEL_LEVEL=1 .venv/bin/pip install dlib
 fi
+
+sudo -u www-data .venv/bin/pip install setuptools'<81'
+sudo -u www-data .venv/bin/pip install 'face_recognition_models @ git+https://github.com/ageitgey/face_recognition_models'
+sudo -u www-data .venv/bin/pip install -r requirements.txt
 
 # --- Systemd + Caddy ---
 echo "[7/7] Configuring services..."
@@ -129,7 +120,7 @@ sudo tee /etc/caddy/Caddyfile > /dev/null << 'CADDY'
     }
 }
 
-attendiq.tadstech.dev {
+http://attendiq.tadstech.dev {
     root * /var/www/attendiq/frontend
     file_server
     try_files {path} /index.html
@@ -141,7 +132,7 @@ attendiq.tadstech.dev {
     encode gzip
 }
 
-attendiq-api.tadstech.dev {
+http://attendiq-api.tadstech.dev {
     reverse_proxy localhost:8000
     request_body {
         max_size 50MB
