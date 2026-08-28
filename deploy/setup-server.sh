@@ -60,7 +60,8 @@ if [ ! -d node_modules ]; then
 fi
 ~/.bun/bin/bun run build
 sudo rm -rf /var/www/attendiq/frontend
-sudo cp -r dist /var/www/attendiq/frontend
+sudo mkdir -p /var/www/attendiq/frontend
+sudo cp -r dist/. /var/www/attendiq/frontend/
 sudo chown -R www-data:www-data /var/www/attendiq/frontend
 
 # --- Python venv + deps ---
