@@ -126,6 +126,8 @@ export const getUsers = (role?: Role) => get<User[]>(`/users${role ? `?role=${ro
 export const createUser = (data: Omit<User, 'id' | 'face_enrolled'> & { password: string }) =>
   post<{ id: number; username: string; role: Role }>('/users', data)
 export const updateUser = (id: number, data: Partial<User>) => put<{ status: string }>(`/users/${id}`, data)
+export const resetPassword = (id: number, newPassword: string) =>
+  post<{ status: string }>(`/users/${id}/reset-password`, { new_password: newPassword })
 export const deleteUser = (id: number) => del<{ status: string }>(`/users/${id}`)
 
 // --- Classes ---

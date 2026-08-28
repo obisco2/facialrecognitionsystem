@@ -351,9 +351,14 @@ class UserCreateRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     full_name: Optional[str] = None
     role: Optional[str] = None
+    title: Optional[str] = None
+    username: Optional[str] = None
     student_id: Optional[str] = None
     email: Optional[str] = None
     face_enrolled: Optional[int] = None
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
 
 class ClassCreateRequest(BaseModel):
     name: str
@@ -433,6 +438,14 @@ def update_user(user_id: int, req: UserUpdateRequest):
     ok = db.update_user(user_id, **req.model_dump(exclude_none=True))
     if not ok:
         raise HTTPException(status_code=400, detail="Update failed")
+    return {"status": "ok"}
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_password(user_id: int, req: PasswordResetRequest):
+    user = db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.update_password(user_id, req.new_password)
     return {"status": "ok"}
 
 @app.delete("/api/users/{user_id}")
