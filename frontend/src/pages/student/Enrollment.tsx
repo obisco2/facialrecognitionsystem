@@ -12,6 +12,7 @@ import {
   type EnrollmentSlotResult,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { showToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 
 const SLOTS = [0, 1, 2, 3, 4]
@@ -90,6 +91,8 @@ export default function StudentEnrollment() {
       await startEnrollment(user!.id, user!.full_name)
       await startCamera()
       setStarted(true)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to start enrollment')
     } finally {
       setBusy(false)
     }
@@ -119,6 +122,8 @@ export default function StudentEnrollment() {
       setCaptured((c) => ({ ...c, [idx]: true }))
       setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(blob) }))
       setResults(null)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to upload photo')
     } finally {
       setBusy(false)
     }
@@ -159,6 +164,8 @@ export default function StudentEnrollment() {
       setPreviews(newPreviews)
       setStarted(true)
       setResults(null)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to upload photos')
     } finally {
       setBusy(false)
       if (fileRef.current) fileRef.current.value = ''
@@ -188,6 +195,8 @@ export default function StudentEnrollment() {
       const r = await validateEnrollment(user!.id)
       setResults(r.results)
       setCanProceed(r.can_proceed)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to validate enrollment')
     } finally {
       setBusy(false)
     }
@@ -200,6 +209,8 @@ export default function StudentEnrollment() {
       await confirmEnrollment(user!.id, user!.full_name)
       setUser({ ...user!, face_enrolled: 1 })
       navigate('/student')
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to confirm enrollment')
     } finally {
       setBusy(false)
     }
@@ -215,6 +226,8 @@ export default function StudentEnrollment() {
       setCanProceed(false)
       await startCamera()
       setStarted(true)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to re-enroll')
     } finally {
       setBusy(false)
     }
@@ -258,7 +271,7 @@ export default function StudentEnrollment() {
       {!started ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-[var(--radius-lg)] bg-graphite">
           <Camera className="size-8 text-graphite-ink-2" />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col items-center gap-3 sm:flex-row">
             <Button onClick={handleStart} loading={busy}>
               <Camera className="size-4" /> Start camera
             </Button>
@@ -306,7 +319,7 @@ export default function StudentEnrollment() {
           </div>
 
           {/* Slots with previews */}
-          <div className="grid grid-cols-5 gap-2 shrink-0">
+          <div className="grid grid-cols-5 gap-1.5 shrink-0 sm:gap-2">
             {SLOTS.map((idx) => {
               const result = stateFor(idx)
               const hasPhoto = captured[idx]
@@ -400,7 +413,7 @@ export default function StudentEnrollment() {
           </div>
 
           {/* Actions */}
-          <div className="flex shrink-0 items-center gap-3">
+          <div className="flex flex-wrap shrink-0 items-center gap-2 sm:gap-3">
             <Button variant="outline" className="border-graphite-rule text-graphite-ink hover:border-accent" onClick={handleValidate} loading={busy}>
               <ShieldCheck className="size-4" /> Validate
             </Button>

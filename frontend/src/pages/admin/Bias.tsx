@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { getBiasResults, runBiasEvaluation } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 
 const ACCENT = 'oklch(58% 0.20 256)'
 
@@ -50,6 +51,7 @@ export default function AdminBias() {
         setRunning(false)
       }, 4000)
     },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to run bias evaluation'),
   })
 
   if (!metrics || metrics.status === 'no_metrics') {
@@ -73,7 +75,7 @@ export default function AdminBias() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="page-header">
         <div>
           <h1 className="mb-1">Bias evaluation</h1>
           <p className="text-sm text-ink-3">Gender Shades methodology — tolerance {metrics.tolerance ?? '—'}.</p>
@@ -84,7 +86,7 @@ export default function AdminBias() {
       </div>
 
       {overall && (
-        <div className="mb-6 grid grid-cols-4 gap-4">
+        <div className="mb-6 bias-stat-grid">
           <Stat label="Total images" value={String(overall.total_images)} />
           <Stat label="Detection rate" value={`${Math.round(overall.detection_rate * 100)}%`} />
           <Stat label="Recognition accuracy" value={`${Math.round(overall.recognition_accuracy * 100)}%`} />
@@ -92,7 +94,7 @@ export default function AdminBias() {
         </div>
       )}
 
-      <div className="mb-6 grid grid-cols-2 gap-4">
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>Accuracy by skin type</CardTitle>

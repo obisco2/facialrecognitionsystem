@@ -25,7 +25,7 @@ export function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(24%_0.02_258/0.4)] p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[oklch(24%_0.02_258/0.4)] p-3 sm:p-4"
       onClick={onClose}
     >
       <div

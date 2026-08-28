@@ -74,7 +74,7 @@ export default function Login() {
             </div>
 
             {error && (
-              <p role="alert" className="rounded-[var(--radius-sm)] bg-danger-tint px-3 py-2 text-sm text-danger-ink">
+              <p role="alert" className="rounded-[var(--radius-sm)] bg-danger-tint px-3 py-2 text-sm text-danger">
                 {error}
               </p>
             )}

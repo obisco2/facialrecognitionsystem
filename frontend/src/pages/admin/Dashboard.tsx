@@ -15,6 +15,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { getAdminStats, getBiasResults, runBiasEvaluation } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 import { Link } from 'react-router-dom'
 
 const ACCENT = 'oklch(58% 0.20 256)'
@@ -66,6 +67,9 @@ export default function AdminDashboard() {
         setBiasRunning(false)
       }, 5000)
     },
+    onError: (err: Error) => {
+      showToast('error', err.message || 'Failed to run bias evaluation')
+    },
   })
 
   const enrollmentRate = stats ? Math.round((stats.students_enrolled / Math.max(stats.students, 1)) * 100) : 0
@@ -73,12 +77,12 @@ export default function AdminDashboard() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-end justify-between">
+      <div className="page-header">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-ink">Admin dashboard</h1>
+          <h1 className="font-display text-xl font-semibold text-ink sm:text-2xl">Admin dashboard</h1>
           <p className="mt-1 text-sm text-ink-3">System overview and quick actions.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="page-header-actions">
           <Link to="/admin/users">
             <Button variant="outline" size="sm">
               <Users className="size-4" /> Manage users
@@ -133,7 +137,7 @@ export default function AdminDashboard() {
           </CardHeader>
           <CardContent>
             <div className="mb-3 flex items-baseline justify-between">
-              <span className="font-display text-3xl font-semibold text-ink">{enrollmentRate}%</span>
+              <span className="font-display text-2xl font-semibold text-ink sm:text-3xl">{enrollmentRate}%</span>
               <span className="text-sm text-ink-3">
                 {stats?.students_enrolled ?? 0} / {stats?.students ?? 0} students
               </span>
@@ -182,7 +186,7 @@ export default function AdminDashboard() {
 
       {/* Bias evaluation */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle>Bias evaluation</CardTitle>
             <p className="mt-0.5 text-sm text-ink-3">
@@ -329,7 +333,7 @@ function StatCard({
         </div>
         <div className="min-w-0">
           <p className="font-mono-label text-ink-3">{label}</p>
-          <p className="font-display text-2xl font-semibold text-ink">{value}</p>
+          <p className="font-display text-xl font-semibold text-ink sm:text-2xl">{value}</p>
           <p className="mt-0.5 truncate text-xs text-ink-3">{detail}</p>
         </div>
       </CardContent>

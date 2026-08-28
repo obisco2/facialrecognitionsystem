@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { getConfig, saveConfig, type SystemConfig } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 
 export default function AdminSettings() {
   const { data } = useQuery({ queryKey: ['config'], queryFn: getConfig })
@@ -18,8 +19,10 @@ export default function AdminSettings() {
     mutationFn: (cfg: SystemConfig) => saveConfig(cfg),
     onSuccess: () => {
       setSaved(true)
+      showToast('success', 'Settings saved')
       setTimeout(() => setSaved(false), 2000)
     },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to save settings'),
   })
 
   if (!form) return null

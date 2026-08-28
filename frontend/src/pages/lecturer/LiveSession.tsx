@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { getClasses, getUsers, startSession, stopSession, getLiveSession, logManualAttendance, videoFeedUrl, recognizeFrame } from '@/lib/api'
 import type { User, RecognizeResult } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth'
 
 const RECOGNITION_INTERVAL = 1500 // ms between recognition frames
@@ -56,9 +57,9 @@ export default function LiveSession() {
       setManualMsg({ type: 'ok', text: `${s?.full_name ?? 'Student'} marked.` })
       setTimeout(() => setManualMsg(null), 2500)
     },
-    onError: (_err, studentId) => {
+    onError: (err: Error, studentId) => {
       const s = students?.find((u: User) => u.id === studentId)
-      setManualMsg({ type: 'err', text: `${s?.full_name ?? 'Student'} already marked today.` })
+      setManualMsg({ type: 'err', text: err.message || `${s?.full_name ?? 'Student'} already marked today.` })
       setManualMarked((prev) => new Set(prev).add(studentId))
       setTimeout(() => setManualMsg(null), 2500)
     },
@@ -145,13 +146,19 @@ export default function LiveSession() {
         // Soft fallback to browser camera if server camera is unavailable (e.g. VPS)
         await startCamera()
       }
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to start session')
     } finally {
       setStarting(false)
     }
   }
 
   async function handleStop() {
-    await stopSession()
+    try {
+      await stopSession()
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to stop session')
+    }
     setRunning(false)
     setShowManual(false)
     setManualMarked(new Set())
@@ -170,12 +177,12 @@ export default function LiveSession() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="mb-4 flex shrink-0 items-center justify-between">
+      <div className="mb-4 flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="mb-1">Live session</h1>
           <p className="text-sm text-ink-3">Start recognition against a class roster.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {!running ? (
             <>
               <select
@@ -271,7 +278,7 @@ export default function LiveSession() {
 
         {/* Stats row */}
         {running && (
-          <div className="grid grid-cols-3 gap-3 shrink-0">
+          <div className="grid grid-cols-2 gap-2 shrink-0 sm:grid-cols-3 sm:gap-3">
             <Stat label="Marked" value={String((live?.marked.length ?? 0) + manualMarked.size)} />
             <Stat label="Unknown" value={String(live?.camera_active ? (live?.unknown ?? 0) : faces.filter((f) => !f.is_known).length)} />
             <Stat label="Session date" value={live?.date ?? '—'} />

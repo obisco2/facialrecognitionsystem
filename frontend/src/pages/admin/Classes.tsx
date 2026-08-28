@@ -14,6 +14,7 @@ import {
   enrollStudent,
   unenrollStudent,
 } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 
 export default function AdminClasses() {
   const qc = useQueryClient()
@@ -36,17 +37,23 @@ export default function AdminClasses() {
       qc.invalidateQueries({ queryKey: ['classes'] })
       setCreateOpen(false)
       setForm({ name: '', code: '', schedule: '', room: '', lecturerId: '' })
+      showToast('success', 'Class created')
     },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to create class'),
   })
 
   const deleteMut = useMutation({
     mutationFn: deleteClass,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['classes'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classes'] })
+      showToast('success', 'Class deleted')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to delete class'),
   })
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="page-header">
         <div>
           <h1 className="mb-1">Classes</h1>
           <p className="text-sm text-ink-3">Create classes and manage student enrollment.</p>
@@ -140,15 +147,17 @@ function EnrollmentManager({ classId, onClose }: { classId: number; onClose: () 
   const enrollMut = useMutation({
     mutationFn: (studentId: number) => enrollStudent(classId, studentId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['enrollments', classId] }),
+    onError: (err: Error) => showToast('error', err.message || 'Failed to enroll student'),
   })
   const unenrollMut = useMutation({
     mutationFn: (studentId: number) => unenrollStudent(classId, studentId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['enrollments', classId] }),
+    onError: (err: Error) => showToast('error', err.message || 'Failed to unenroll student'),
   })
 
   return (
     <Dialog open onClose={onClose} title="Manage enrollment">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="enroll-grid">
         <div>
           <p className="mb-2 font-mono-label text-ink-3">Enrolled ({data?.enrolled.length ?? 0})</p>
           <ul className="max-h-64 space-y-1 overflow-y-auto">

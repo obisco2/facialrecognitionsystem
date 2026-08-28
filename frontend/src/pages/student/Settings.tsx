@@ -9,17 +9,20 @@ export default function StudentSettings() {
   const { user } = useAuth()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<'ok' | 'error' | null>(null)
+  const [errorMsg, setErrorMsg] = useState('')
 
   if (!user) return null
 
   async function handleRetrain() {
     setBusy(true)
     setResult(null)
+    setErrorMsg('')
     try {
       await retrainFaceModel(user!.id, user!.full_name)
       setResult('ok')
-    } catch {
+    } catch (err) {
       setResult('error')
+      setErrorMsg(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
       setBusy(false)
     }
@@ -69,7 +72,7 @@ export default function StudentSettings() {
                 Retrain face model
               </Button>
               {result === 'ok' && <span className="text-sm text-success-ink">Done.</span>}
-              {result === 'error' && <span className="text-sm text-danger">Something went wrong.</span>}
+              {result === 'error' && <span className="text-sm text-danger">{errorMsg}</span>}
             </div>
           </CardContent>
         </Card>

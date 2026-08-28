@@ -4,6 +4,7 @@ import { Download, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { getClasses, getAttendanceHistoryRange, deleteAttendanceRecord, exportAttendanceData } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth'
 
 function todayStr() {
@@ -35,8 +36,12 @@ export default function LecturerHistory() {
   })
 
   async function handleDelete(id: number) {
-    await deleteAttendanceRecord(id)
-    refetch()
+    try {
+      await deleteAttendanceRecord(id)
+      refetch()
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to delete record')
+    }
   }
 
   async function handleExport(format: 'csv' | 'xlsx') {
@@ -51,6 +56,8 @@ export default function LecturerHistory() {
       a.download = filename
       a.click()
       URL.revokeObjectURL(url)
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to export data')
     } finally {
       setExporting(false)
     }
@@ -95,7 +102,7 @@ export default function LecturerHistory() {
             className="h-10 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
           />
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="flex gap-2 sm:ml-auto">
           <Button variant="outline" size="sm" onClick={() => handleExport('csv')} disabled={!classId} loading={exporting}>
             <Download className="size-3.5" /> CSV
           </Button>

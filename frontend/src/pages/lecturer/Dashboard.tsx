@@ -26,7 +26,7 @@ export default function LecturerDashboard() {
             </div>
             <div>
               <p className="font-mono-label text-ink-3">Your classes</p>
-              <p className="font-display text-2xl font-semibold text-ink">{classes?.length ?? '—'}</p>
+              <p className="font-display text-xl font-semibold text-ink sm:text-2xl">{classes?.length ?? '—'}</p>
             </div>
           </CardContent>
         </Card>

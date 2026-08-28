@@ -63,15 +63,15 @@ export default function StudentDashboard() {
   return (
     <div>
       {/* Greeting */}
-      <div className="mb-6 flex items-center gap-4">
-        <div className="flex size-12 items-center justify-center rounded-full bg-accent-tint font-display text-lg font-semibold text-accent">
+      <div className="mb-6 flex items-center gap-3 sm:gap-4">
+        <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-accent-tint font-display text-base font-semibold text-accent sm:size-12 sm:text-lg">
           {user?.full_name?.[0] ?? '?'}
         </div>
         <div>
-          <h1 className="text-xl">
+          <h1 className="text-lg sm:text-xl">
             {greeting()}, {user?.full_name?.split(' ')[0]}
           </h1>
-          <p className="text-sm text-ink-3">
+          <p className="text-xs text-ink-3 sm:text-sm">
             {user?.student_id ? `ID: ${user.student_id}  ·  ` : ''}
             {todayFormatted()}
           </p>
@@ -113,7 +113,7 @@ export default function StudentDashboard() {
             </div>
             <div>
               <p className="font-mono-label text-ink-3">Sessions attended</p>
-              <p className="font-display text-2xl font-semibold text-ink">{records?.length ?? '—'}</p>
+              <p className="font-display text-xl font-semibold text-ink sm:text-2xl">{records?.length ?? '—'}</p>
             </div>
           </CardContent>
         </Card>
@@ -125,7 +125,7 @@ export default function StudentDashboard() {
             </div>
             <div>
               <p className="font-mono-label text-ink-3">Classes tracked</p>
-              <p className="font-display text-2xl font-semibold text-ink">{distinctClasses || '—'}</p>
+              <p className="font-display text-xl font-semibold text-ink sm:text-2xl">{distinctClasses || '—'}</p>
             </div>
           </CardContent>
         </Card>
@@ -145,7 +145,7 @@ export default function StudentDashboard() {
             </div>
             <div>
               <p className="font-mono-label text-ink-3">Attendance rate</p>
-              <p className="font-display text-2xl font-semibold text-ink">{attendanceRate !== null ? `${attendanceRate}%` : '—'}</p>
+              <p className="font-display text-xl font-semibold text-ink sm:text-2xl">{attendanceRate !== null ? `${attendanceRate}%` : '—'}</p>
             </div>
           </CardContent>
         </Card>

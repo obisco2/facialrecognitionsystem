@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog } from '@/components/ui/dialog'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { getUsers, createUser, deleteUser, type Role } from '@/lib/api'
+import { showToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 
 const TABS: (Role | 'all')[] = ['all', 'admin', 'lecturer', 'student']
@@ -34,17 +35,23 @@ export default function AdminUsers() {
       qc.invalidateQueries({ queryKey: ['users'] })
       setCreateOpen(false)
       setForm({ username: '', password: '', role: 'student', full_name: '', student_id: '', email: '' })
+      showToast('success', 'User created')
     },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to create user'),
   })
 
   const deleteMut = useMutation({
     mutationFn: deleteUser,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] })
+      showToast('success', 'User deleted')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to delete user'),
   })
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="page-header">
         <div>
           <h1 className="mb-1">Users</h1>
           <p className="text-sm text-ink-3">Manage admin, lecturer, and student accounts.</p>
@@ -54,7 +61,7 @@ export default function AdminUsers() {
         </Button>
       </div>
 
-      <div className="mb-4 flex gap-1 border-b border-rule">
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-rule">
         {TABS.map((t) => (
           <button
             key={t}
