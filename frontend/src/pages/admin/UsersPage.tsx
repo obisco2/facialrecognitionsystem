@@ -23,6 +23,7 @@ export default function AdminUsers() {
   const [editUser, setEditUser] = useState<User | null>(null)
   const [editForm, setEditForm] = useState({ full_name: '', title: '', username: '', student_id: '', email: '' })
   const [newPassword, setNewPassword] = useState('')
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null)
 
   const { data: users } = useQuery({ queryKey: ['users'], queryFn: () => getUsers() })
   const filtered = tab === 'all' ? users : users?.filter((u) => u.role === tab)
@@ -172,13 +173,15 @@ export default function AdminUsers() {
                   >
                     <Pencil className="size-4" />
                   </button>
-                  <button
-                    onClick={() => confirm(`Delete ${u.full_name}?`) && deleteMut.mutate(u.id)}
-                    className="text-ink-3 hover:text-danger"
-                    aria-label="Delete user"
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
+                  {u.role !== 'admin' && (
+                    <button
+                      onClick={() => setDeleteConfirmUser(u)}
+                      className="text-ink-3 hover:text-danger"
+                      aria-label="Delete user"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
                 </div>
               </Td>
             </Tr>
@@ -318,6 +321,31 @@ export default function AdminUsers() {
               className="w-full"
             >
               Reset password
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog open={!!deleteConfirmUser} onClose={() => setDeleteConfirmUser(null)} title="Delete user">
+        <div className="space-y-4 pt-2">
+          <p className="text-sm text-ink-2">
+            Are you sure you want to delete <strong>{deleteConfirmUser?.full_name}</strong>? This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteConfirmUser(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (deleteConfirmUser) {
+                  deleteMut.mutate(deleteConfirmUser.id)
+                  setDeleteConfirmUser(null)
+                }
+              }}
+              loading={deleteMut.isPending}
+            >
+              Delete
             </Button>
           </div>
         </div>
