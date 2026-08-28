@@ -15,6 +15,7 @@ import LecturerHistory from '@/pages/lecturer/History'
 import StudentDashboard from '@/pages/student/Dashboard'
 import StudentEnrollment from '@/pages/student/Enrollment'
 import StudentSettings from '@/pages/student/Settings'
+import { ToastContainer } from '@/components/ui/toast'
 
 function Root() {
   const { user } = useAuth()
@@ -23,38 +24,41 @@ function Root() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Root />} />
-      <Route path="/login" element={<Login />} />
+    <>
+      <Routes>
+        <Route path="/" element={<Root />} />
+        <Route path="/login" element={<Login />} />
 
-      <Route element={<ProtectedRoute role="admin" />}>
-        <Route element={<AppShell />}>
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/classes" element={<AdminClasses />} />
-          <Route path="/admin/users" element={<AdminUsers />} />
-          <Route path="/admin/bias" element={<AdminBias />} />
-          <Route path="/admin/settings" element={<AdminSettings />} />
+        <Route element={<ProtectedRoute role="admin" />}>
+          <Route element={<AppShell />}>
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/admin/classes" element={<AdminClasses />} />
+            <Route path="/admin/users" element={<AdminUsers />} />
+            <Route path="/admin/bias" element={<AdminBias />} />
+            <Route path="/admin/settings" element={<AdminSettings />} />
+          </Route>
         </Route>
-      </Route>
 
-      <Route element={<ProtectedRoute role="lecturer" />}>
-        <Route element={<AppShell />}>
-          <Route path="/lecturer" element={<LecturerDashboard />} />
-          <Route path="/lecturer/classes" element={<LecturerClasses />} />
-          <Route path="/lecturer/live" element={<LiveSession />} />
-          <Route path="/lecturer/history" element={<LecturerHistory />} />
+        <Route element={<ProtectedRoute role="lecturer" />}>
+          <Route element={<AppShell />}>
+            <Route path="/lecturer" element={<LecturerDashboard />} />
+            <Route path="/lecturer/classes" element={<LecturerClasses />} />
+            <Route path="/lecturer/live" element={<LiveSession />} />
+            <Route path="/lecturer/history" element={<LecturerHistory />} />
+          </Route>
         </Route>
-      </Route>
 
-      <Route element={<ProtectedRoute role="student" />}>
-        <Route element={<AppShell />}>
-          <Route path="/student" element={<StudentDashboard />} />
-          <Route path="/student/enrollment" element={<StudentEnrollment />} />
-          <Route path="/student/settings" element={<StudentSettings />} />
+        <Route element={<ProtectedRoute role="student" />}>
+          <Route element={<AppShell />}>
+            <Route path="/student" element={<StudentDashboard />} />
+            <Route path="/student/enrollment" element={<StudentEnrollment />} />
+            <Route path="/student/settings" element={<StudentSettings />} />
+          </Route>
         </Route>
-      </Route>
 
-      <Route path="*" element={<Root />} />
-    </Routes>
+        <Route path="*" element={<Root />} />
+      </Routes>
+      <ToastContainer />
+    </>
   )
 }

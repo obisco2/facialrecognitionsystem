@@ -4,7 +4,6 @@ import { ScanFace, Search, LogOut, LayoutDashboard, BookOpen, Users, Scale, Sett
 import { useAuth } from '@/lib/auth'
 import { NAV_BY_ROLE } from '@/lib/nav'
 import { CommandPalette } from './CommandPalette'
-import { ToastContainer } from './ui/toast'
 import { cn } from '@/lib/utils'
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -155,7 +154,6 @@ export function AppShell() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
       />
-      <ToastContainer />
     </div>
   )
 }
