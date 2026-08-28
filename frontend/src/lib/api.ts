@@ -51,6 +51,7 @@ export interface User {
   student_id?: string | null
   email?: string | null
   department?: string | null
+  faculty?: string | null
   level?: string | null
   face_enrolled?: number
   created_at?: string | null

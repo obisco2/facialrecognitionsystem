@@ -90,7 +90,7 @@ export default function AdminUsers() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
       setCreateOpen(false)
-      setForm({ username: '', password: '', role: 'student', full_name: '', title: '', student_id: '', email: '' })
+      setForm({ username: '', password: '', role: 'student', full_name: '', title: '', student_id: '', email: '', faculty: '', department: '' })
       showToast('success', 'User created')
     },
     onError: (err: Error) => showToast('error', err.message || 'Failed to create user'),

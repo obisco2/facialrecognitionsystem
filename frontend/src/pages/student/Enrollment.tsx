@@ -39,7 +39,6 @@ export default function StudentEnrollment() {
   const [livenessOpen, setLivenessOpen] = useState(false)
   const [livenessStep, setLivenessStep] = useState<'idle' | 'eyes_open' | 'eyes_closed' | 'verifying' | 'success'>('idle')
   const [fileOpen, setFileOpen] = useState<File | null>(null)
-  const [fileClosed, setFileClosed] = useState<File | null>(null)
   const [livenessError, setLivenessError] = useState<string | null>(null)
   const [livenessVerified, setLivenessVerified] = useState(false)
 
@@ -515,7 +514,6 @@ export default function StudentEnrollment() {
                   setLivenessStep('eyes_open')
                   setLivenessError(null)
                   setFileOpen(null)
-                  setFileClosed(null)
                 }}
                 className="ml-auto"
               >
@@ -568,7 +566,6 @@ export default function StudentEnrollment() {
                 onClick={() => {
                   const file = snapFrameToFile('closed')
                   if (file) {
-                    setFileClosed(file)
                     runLivenessApi(fileOpen!, file)
                   } else {
                     setLivenessError('Could not capture frame.')
