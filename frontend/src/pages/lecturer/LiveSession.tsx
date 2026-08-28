@@ -28,6 +28,39 @@ export default function LiveSession() {
   const [cameraActive, setCameraActive] = useState(false)
   const [faces, setFaces] = useState<RecognizeResult[]>([])
 
+  const [startTime, setStartTime] = useState<number | null>(null)
+  const [sessionTime, setSessionTime] = useState('')
+  const [elapsedTime, setElapsedTime] = useState('')
+
+  useEffect(() => {
+    if (running) {
+      if (!startTime) {
+        setStartTime(Date.now())
+      }
+    } else {
+      setStartTime(null)
+      setElapsedTime('')
+    }
+  }, [running, startTime])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = new Date()
+      setSessionTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+
+      if (startTime) {
+        const diffMs = Date.now() - startTime
+        const diffSecs = Math.floor(diffMs / 1000)
+        const hrs = Math.floor(diffSecs / 3600)
+        const mins = Math.floor((diffSecs % 3600) / 60)
+        const secs = diffSecs % 60
+        const pad = (n: number) => String(n).padStart(2, '0')
+        setElapsedTime(`${pad(hrs)}:${pad(mins)}:${pad(secs)}`)
+      }
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [startTime])
+
   const { data: classes } = useQuery({
     queryKey: ['classes', user?.id],
     queryFn: () => getClasses(user?.id),
@@ -218,6 +251,15 @@ export default function LiveSession() {
       <div className="flex min-h-0 flex-1 flex-col gap-4 rounded-[var(--radius-lg)] bg-graphite p-4">
         {/* Camera feed */}
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
+          {running && (
+            <div className="absolute top-4 left-4 z-10 flex flex-col gap-1 rounded bg-black/60 px-3 py-2 font-mono text-xs text-white backdrop-blur-sm">
+              <div className="flex items-center gap-1.5 font-bold">
+                <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
+                <span>Elapsed: {elapsedTime || '00:00:00'}</span>
+              </div>
+              <div className="text-[10px] opacity-75">Local Time: {sessionTime}</div>
+            </div>
+          )}
           {running ? (
             live?.camera_active ? (
               <img src={videoFeedUrl} alt="Live camera feed" className="h-full w-full object-contain" />

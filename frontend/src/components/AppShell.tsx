@@ -5,6 +5,8 @@ import { useAuth } from '@/lib/auth'
 import { NAV_BY_ROLE } from '@/lib/nav'
 import { CommandPalette } from './CommandPalette'
 import { cn } from '@/lib/utils'
+import { Dialog } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   LayoutDashboard,
@@ -23,6 +25,7 @@ export function AppShell() {
   const location = useLocation()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false)
 
   // Close sidebar on route change (mobile)
   useEffect(() => {
@@ -113,10 +116,7 @@ export function AppShell() {
             </div>
           </div>
           <button
-            onClick={() => {
-              logout()
-              navigate('/login')
-            }}
+            onClick={() => setLogoutConfirmOpen(true)}
             className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-3 py-1.5 text-sm text-ink-3 hover:bg-paper-3 hover:text-danger"
           >
             <LogOut className="size-4" /> Log out
@@ -154,6 +154,29 @@ export function AppShell() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
       />
+
+      <Dialog open={logoutConfirmOpen} onClose={() => setLogoutConfirmOpen(false)} title="Confirm log out">
+        <div className="space-y-4 pt-2">
+          <p className="text-sm text-ink-2">
+            Are you sure you want to log out of your session?
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setLogoutConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setLogoutConfirmOpen(false)
+                logout()
+                navigate('/login')
+              }}
+            >
+              Log out
+            </Button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   )
 }

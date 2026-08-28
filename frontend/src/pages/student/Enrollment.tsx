@@ -4,11 +4,13 @@ import { Camera, Check, Trash2, ShieldCheck, CheckCircle2, Upload, CameraOff } f
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Dialog } from '@/components/ui/dialog'
 import {
   startEnrollment,
   uploadEnrollment,
   validateEnrollment,
   confirmEnrollment,
+  verifyLiveness,
   type EnrollmentSlotResult,
 } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
@@ -32,6 +34,14 @@ export default function StudentEnrollment() {
   const [busy, setBusy] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [cameraActive, setCameraActive] = useState(false)
+
+  // Liveness validation states
+  const [livenessOpen, setLivenessOpen] = useState(false)
+  const [livenessStep, setLivenessStep] = useState<'idle' | 'eyes_open' | 'eyes_closed' | 'verifying' | 'success'>('idle')
+  const [fileOpen, setFileOpen] = useState<File | null>(null)
+  const [fileClosed, setFileClosed] = useState<File | null>(null)
+  const [livenessError, setLivenessError] = useState<string | null>(null)
+  const [livenessVerified, setLivenessVerified] = useState(false)
 
   if (!user) return null
 
@@ -138,7 +148,7 @@ export default function StudentEnrollment() {
 
     setBusy(true)
     try {
-      await uploadEnrollment(user!.id, [file])
+      await uploadEnrollment(user!.id, [file], idx)
       setCaptured((c) => ({ ...c, [idx]: true }))
       setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(blob) }))
       setResults(null)
@@ -240,6 +250,42 @@ export default function StudentEnrollment() {
       showToast('error', err instanceof Error ? err.message : 'Failed to confirm enrollment')
     } finally {
       setBusy(false)
+    }
+  }
+
+  function snapFrameToFile(name: string): File | null {
+    if (!videoRef.current || !canvasRef.current || !cameraActive) return null
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(video, 0, 0)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+    const base64 = dataUrl.split(',')[1]
+
+    const byteString = atob(base64)
+    const ab = new ArrayBuffer(byteString.length)
+    const ia = new Uint8Array(ab)
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i)
+    }
+    const blob = new Blob([ab], { type: 'image/jpeg' })
+    return new File([blob], `${name}.jpg`, { type: 'image/jpeg' })
+  }
+
+  async function runLivenessApi(fOpen: File, fClosed: File) {
+    setLivenessError(null)
+    setLivenessStep('verifying')
+    try {
+      await verifyLiveness(user!.id, fOpen, fClosed)
+      setLivenessStep('success')
+      setLivenessVerified(true)
+      showToast('success', 'Liveness verified successfully!')
+    } catch (err) {
+      setLivenessStep('idle')
+      setLivenessError(err instanceof Error ? err.message : 'Liveness check failed. Please try again.')
     }
   }
 
@@ -394,7 +440,7 @@ export default function StudentEnrollment() {
                                 }
                                 setBusy(true)
                                 try {
-                                  await uploadEnrollment(user!.id, [file])
+                                  await uploadEnrollment(user!.id, [file], idx)
                                   setCaptured((c) => ({ ...c, [idx]: true }))
                                   setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(file) }))
                                   setResults(null)
@@ -459,15 +505,115 @@ export default function StudentEnrollment() {
             />
             {results && (
               <Badge variant={canProceed ? 'success' : 'danger'} dot>
-                {canProceed ? 'Ready to confirm' : 'Needs at least 3 valid photos'}
+                {canProceed ? (livenessVerified ? 'Liveness verified — ready' : 'Validated — liveness check required') : 'Needs at least 3 valid photos'}
               </Badge>
             )}
-            <Button onClick={handleConfirm} disabled={!canProceed} loading={busy} className="ml-auto">
-              Confirm enrollment
-            </Button>
+            {canProceed && !livenessVerified ? (
+              <Button
+                onClick={() => {
+                  setLivenessOpen(true)
+                  setLivenessStep('eyes_open')
+                  setLivenessError(null)
+                  setFileOpen(null)
+                  setFileClosed(null)
+                }}
+                className="ml-auto"
+              >
+                Verify Liveness
+              </Button>
+            ) : (
+              <Button onClick={handleConfirm} disabled={!canProceed || !livenessVerified} loading={busy} className="ml-auto">
+                Confirm enrollment
+              </Button>
+            )}
           </div>
         </div>
       )}
+
+      <Dialog open={livenessOpen} onClose={() => setLivenessOpen(false)} title="Liveness Spoof Check">
+        <div className="space-y-4 pt-2 text-sm text-ink-2">
+          <p>
+            Please complete this quick anti-spoof check to verify you are a live user.
+          </p>
+
+          {livenessStep === 'eyes_open' && (
+            <div className="space-y-3">
+              <div className="rounded bg-accent/10 p-3 text-accent border border-accent/20">
+                <strong>Challenge 1 of 2:</strong> Look straight at the camera with your <strong>eyes fully open</strong> and click Snap.
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  const file = snapFrameToFile('open')
+                  if (file) {
+                    setFileOpen(file)
+                    setLivenessStep('eyes_closed')
+                  } else {
+                    setLivenessError('Could not capture frame. Is the camera active?')
+                  }
+                }}
+              >
+                Snap Open Eyes
+              </Button>
+            </div>
+          )}
+
+          {livenessStep === 'eyes_closed' && (
+            <div className="space-y-3">
+              <div className="rounded bg-accent/10 p-3 text-accent border border-accent/20">
+                <strong>Challenge 2 of 2:</strong> Close your <strong>eyes completely</strong> and click Snap.
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  const file = snapFrameToFile('closed')
+                  if (file) {
+                    setFileClosed(file)
+                    runLivenessApi(fileOpen!, file)
+                  } else {
+                    setLivenessError('Could not capture frame.')
+                  }
+                }}
+              >
+                Snap Closed Eyes
+              </Button>
+            </div>
+          )}
+
+          {livenessStep === 'verifying' && (
+            <div className="py-6 text-center text-ink-3">
+              Verifying eyes aspect ratio and face match…
+            </div>
+          )}
+
+          {livenessStep === 'success' && (
+            <div className="space-y-3 text-center">
+              <div className="flex justify-center text-success mb-2">
+                <Check className="size-10" />
+              </div>
+              <p className="font-semibold text-success-ink">Liveness Verified!</p>
+              <p className="text-xs text-ink-3">You can now proceed to confirm your enrollment.</p>
+              <Button className="w-full" onClick={() => setLivenessOpen(false)}>
+                Continue
+              </Button>
+            </div>
+          )}
+
+          {livenessError && (
+            <p className="rounded bg-danger-tint p-3 text-xs text-danger border border-danger/20">
+              {livenessError}
+            </p>
+          )}
+
+          {livenessStep !== 'success' && livenessStep !== 'verifying' && (
+            <div className="flex justify-end gap-2 border-t border-rule pt-3">
+              <Button variant="outline" onClick={() => setLivenessOpen(false)}>
+                Cancel
+              </Button>
+            </div>
+          )}
+        </div>
+      </Dialog>
     </div>
   )
 }

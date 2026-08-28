@@ -43,6 +43,7 @@ export default function StudentSettings() {
             <Row label="Name" value={user.full_name} />
             {user.student_id && <Row label="Matric Number" value={user.student_id} />}
             {user.email && <Row label="Email" value={user.email} />}
+            {user.faculty && <Row label="Faculty" value={user.faculty} />}
             {user.department && <Row label="Department" value={user.department} />}
             {user.level && <Row label="Level" value={user.level} />}
             <Row

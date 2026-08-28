@@ -6,27 +6,73 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Dialog } from '@/components/ui/dialog'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
-import { getUsers, createUser, updateUser, resetPassword, deleteUser, type User, type Role } from '@/lib/api'
+import { getUsers, createUser, updateUser, resetPassword, deleteUser, getFaculties, getDepartments, createFaculty, createDepartment, deleteFaculty, deleteDepartment, type User, type Role } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth'
 
-const TABS: (Role | 'all')[] = ['all', 'admin', 'lecturer', 'student']
+const TABS: (Role | 'all' | 'faculties')[] = ['all', 'admin', 'lecturer', 'student', 'faculties']
 
 export default function AdminUsers() {
   const qc = useQueryClient()
   const { user, setUser } = useAuth()
-  const [tab, setTab] = useState<Role | 'all'>('all')
+  const [tab, setTab] = useState<Role | 'all' | 'faculties'>('all')
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ username: '', password: '', role: 'student' as Role, full_name: '', title: '', student_id: '', email: '' })
+  const [form, setForm] = useState({ username: '', password: '', role: 'student' as Role, full_name: '', title: '', student_id: '', email: '', faculty: '', department: '' })
 
   const [editUser, setEditUser] = useState<User | null>(null)
-  const [editForm, setEditForm] = useState({ full_name: '', title: '', username: '', student_id: '', email: '' })
+  const [editForm, setEditForm] = useState({ full_name: '', title: '', username: '', student_id: '', email: '', faculty: '', department: '' })
   const [newPassword, setNewPassword] = useState('')
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<User | null>(null)
 
+  const [newFacultyName, setNewFacultyName] = useState('')
+  const [newDeptName, setNewDeptName] = useState('')
+  const [newDeptFacultyId, setNewDeptFacultyId] = useState('')
+
   const { data: users } = useQuery({ queryKey: ['users'], queryFn: () => getUsers() })
+  const { data: faculties } = useQuery({ queryKey: ['faculties'], queryFn: getFaculties })
+  const { data: departments } = useQuery({ queryKey: ['departments'], queryFn: () => getDepartments() })
+  
   const filtered = tab === 'all' ? users : users?.filter((u) => u.role === tab)
+
+  const addFacMut = useMutation({
+    mutationFn: createFaculty,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['faculties'] })
+      setNewFacultyName('')
+      showToast('success', 'Faculty added')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to add faculty'),
+  })
+
+  const addDeptMut = useMutation({
+    mutationFn: ({ facultyId, name }: { facultyId: number; name: string }) => createDepartment(facultyId, name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['departments'] })
+      setNewDeptName('')
+      showToast('success', 'Department added')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to add department'),
+  })
+
+  const delFacMut = useMutation({
+    mutationFn: deleteFaculty,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['faculties'] })
+      qc.invalidateQueries({ queryKey: ['departments'] })
+      showToast('success', 'Faculty deleted')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to delete faculty'),
+  })
+
+  const delDeptMut = useMutation({
+    mutationFn: deleteDepartment,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['departments'] })
+      showToast('success', 'Department deleted')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to delete department'),
+  })
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -38,6 +84,8 @@ export default function AdminUsers() {
         title: form.title || undefined,
         student_id: form.student_id || undefined,
         email: form.email || undefined,
+        faculty: form.faculty || undefined,
+        department: form.department || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
@@ -66,6 +114,8 @@ export default function AdminUsers() {
       if (editForm.username !== editUser.username) data.username = editForm.username
       if (editForm.student_id !== (editUser.student_id ?? '')) data.student_id = editForm.student_id || undefined
       if (editForm.email !== (editUser.email ?? '')) data.email = editForm.email || undefined
+      if (editForm.faculty !== (editUser.faculty ?? '')) data.faculty = editForm.faculty || undefined
+      if (editForm.department !== (editUser.department ?? '')) data.department = editForm.department || undefined
       return updateUser(editUser.id, data)
     },
     onSuccess: () => {
@@ -78,6 +128,8 @@ export default function AdminUsers() {
           title: editForm.title || null,
           student_id: editForm.student_id || null,
           email: editForm.email || null,
+          faculty: editForm.faculty || null,
+          department: editForm.department || null,
         })
       }
       setEditUser(null)
@@ -125,76 +177,182 @@ export default function AdminUsers() {
         ))}
       </div>
 
-      <Table>
-        <Thead>
-          <th>Name</th>
-          <th>Matric No. / Email</th>
-          <th>Role</th>
-          <th>Face enrolled</th>
-          <th />
-        </Thead>
-        <Tbody>
-          {filtered?.map((u) => (
-            <Tr key={u.id}>
-              <Td className="font-medium text-ink">
-                {u.title ? `${u.title} ` : ''}{u.full_name}
-              </Td>
-              <Td className="font-mono-label text-xs">
-                {u.role === 'student' ? (u.student_id || '—') : (u.email || u.username)}
-              </Td>
-              <Td>
-                <Badge variant="neutral">{u.role}</Badge>
-              </Td>
-              <Td>
-                {u.role === 'student' ? (
-                  <Badge variant={u.face_enrolled ? 'success' : 'warning'} dot>
-                    {u.face_enrolled ? 'enrolled' : 'pending'}
-                  </Badge>
-                ) : (
-                  '—'
-                )}
-              </Td>
-              <Td>
-                <div className="flex items-center gap-2">
+      {tab === 'faculties' ? (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          {/* Manage faculties */}
+          <div className="space-y-4 rounded-[var(--radius-lg)] border border-rule bg-paper p-4">
+            <h2 className="text-base font-bold text-ink">Faculties</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!newFacultyName) return
+                addFacMut.mutate(newFacultyName)
+              }}
+              className="flex gap-2"
+            >
+              <Input
+                placeholder="Faculty name (e.g. Faculty of Science)"
+                value={newFacultyName}
+                onChange={(e) => setNewFacultyName(e.target.value)}
+                required
+              />
+              <Button type="submit" loading={addFacMut.isPending}>Add</Button>
+            </form>
+            <div className="divide-y divide-rule border-t border-rule mt-2">
+              {faculties?.map((f) => (
+                <div key={f.id} className="flex items-center justify-between py-2 text-sm">
+                  <span className="font-medium text-ink">{f.name}</span>
                   <button
-                    onClick={() => {
-                      setEditUser(u)
-                      setEditForm({
-                        full_name: u.full_name,
-                        title: u.title ?? '',
-                        username: u.username,
-                        student_id: u.student_id ?? '',
-                        email: u.email ?? '',
-                      })
-                      setNewPassword('')
-                    }}
-                    className="text-ink-3 hover:text-accent"
-                    aria-label="Edit user"
+                    onClick={() => confirm(`Delete ${f.name}?`) && delFacMut.mutate(f.id)}
+                    className="text-ink-3 hover:text-danger"
+                    aria-label="Delete faculty"
                   >
-                    <Pencil className="size-4" />
+                    <Trash2 className="size-4" />
                   </button>
-                  {u.role !== 'admin' && (
-                    <button
-                      onClick={() => setDeleteConfirmUser(u)}
-                      className="text-ink-3 hover:text-danger"
-                      aria-label="Delete user"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  )}
                 </div>
-              </Td>
-            </Tr>
-          ))}
-          {filtered?.length === 0 && (
-            <Tr>
-              <Td colSpan={5} className="py-8 text-center text-ink-3">
-                No users in this category.
-              </Td>
-            </Tr>
-          )}
-        </Tbody>
-      </Table>
+              ))}
+              {faculties?.length === 0 && (
+                <p className="py-4 text-center text-xs text-ink-3">No faculties created yet.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Manage departments */}
+          <div className="space-y-4 rounded-[var(--radius-lg)] border border-rule bg-paper p-4">
+            <h2 className="text-base font-bold text-ink">Departments</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (!newDeptName || !newDeptFacultyId) return
+                addDeptMut.mutate({ facultyId: Number(newDeptFacultyId), name: newDeptName })
+              }}
+              className="space-y-3"
+            >
+              <select
+                value={newDeptFacultyId}
+                onChange={(e) => setNewDeptFacultyId(e.target.value)}
+                className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                required
+              >
+                <option value="">Select Faculty…</option>
+                {faculties?.map((f) => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Department name"
+                  value={newDeptName}
+                  onChange={(e) => setNewDeptName(e.target.value)}
+                  required
+                />
+                <Button type="submit" loading={addDeptMut.isPending}>Add</Button>
+              </div>
+            </form>
+            <div className="divide-y divide-rule border-t border-rule mt-2">
+              {departments?.map((d) => (
+                <div key={d.id} className="flex items-center justify-between py-2 text-sm">
+                  <div>
+                    <span className="font-medium text-ink block">{d.name}</span>
+                    <span className="text-[10px] text-ink-3">{d.faculty_name}</span>
+                  </div>
+                  <button
+                    onClick={() => confirm(`Delete ${d.name}?`) && delDeptMut.mutate(d.id)}
+                    className="text-ink-3 hover:text-danger"
+                    aria-label="Delete department"
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              ))}
+              {departments?.length === 0 && (
+                <p className="py-4 text-center text-xs text-ink-3">No departments created yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <Table>
+          <Thead>
+            <th>Name</th>
+            <th>Matric No. / Email</th>
+            <th>Faculty</th>
+            <th>Department</th>
+            <th>Role</th>
+            <th>Face enrolled</th>
+            <th />
+          </Thead>
+          <Tbody>
+            {filtered?.map((u) => (
+              <Tr key={u.id}>
+                <Td className="font-medium text-ink">
+                  {u.title ? `${u.title} ` : ''}{u.full_name}
+                </Td>
+                <Td className="font-mono-label text-xs">
+                  {u.role === 'student' ? (u.student_id || '—') : (u.email || u.username)}
+                </Td>
+                <Td className="text-xs text-ink-2 max-w-[140px] truncate">
+                  {u.faculty || '—'}
+                </Td>
+                <Td className="text-xs text-ink-2 max-w-[140px] truncate">
+                  {u.department || '—'}
+                </Td>
+                <Td>
+                  <Badge variant="neutral">{u.role}</Badge>
+                </Td>
+                <Td>
+                  {u.role === 'student' ? (
+                    <Badge variant={u.face_enrolled ? 'success' : 'warning'} dot>
+                      {u.face_enrolled ? 'enrolled' : 'pending'}
+                    </Badge>
+                  ) : (
+                    '—'
+                  )}
+                </Td>
+                <Td>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setEditUser(u)
+                        setEditForm({
+                          full_name: u.full_name,
+                          title: u.title ?? '',
+                          username: u.username,
+                          student_id: u.student_id ?? '',
+                          email: u.email ?? '',
+                          faculty: u.faculty ?? '',
+                          department: u.department ?? '',
+                        })
+                        setNewPassword('')
+                      }}
+                      className="text-ink-3 hover:text-accent"
+                      aria-label="Edit user"
+                    >
+                      <Pencil className="size-4" />
+                    </button>
+                    {u.role !== 'admin' && (
+                      <button
+                        onClick={() => setDeleteConfirmUser(u)}
+                        className="text-ink-3 hover:text-danger"
+                        aria-label="Delete user"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    )}
+                  </div>
+                </Td>
+              </Tr>
+            ))}
+            {filtered?.length === 0 && (
+              <Tr>
+                <Td colSpan={7} className="py-8 text-center text-ink-3">
+                  No users in this category.
+                </Td>
+              </Tr>
+            )}
+          </Tbody>
+        </Table>
+      )}
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title="New user">
         <form
@@ -247,6 +405,36 @@ export default function AdminUsers() {
           {form.role === 'lecturer' && (
             <Input type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           )}
+          {form.role !== 'admin' && (
+            <>
+              <select
+                value={form.faculty}
+                onChange={(e) => setForm({ ...form, faculty: e.target.value, department: '' })}
+                className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+              >
+                <option value="">Select Faculty…</option>
+                {faculties?.map((f) => (
+                  <option key={f.id} value={f.name}>{f.name}</option>
+                ))}
+              </select>
+              <select
+                value={form.department}
+                onChange={(e) => setForm({ ...form, department: e.target.value })}
+                className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                disabled={!form.faculty}
+              >
+                <option value="">Select Department…</option>
+                {departments
+                  ?.filter((d) => {
+                    const matchedFaculty = faculties?.find((fac) => fac.name === form.faculty)
+                    return matchedFaculty ? d.faculty_id === matchedFaculty.id : false
+                  })
+                  ?.map((d) => (
+                    <option key={d.id} value={d.name}>{d.name}</option>
+                  ))}
+              </select>
+            </>
+          )}
           <Button type="submit" className="w-full" loading={createMut.isPending}>
             Create user
           </Button>
@@ -297,6 +485,36 @@ export default function AdminUsers() {
                 value={editForm.student_id}
                 onChange={(e) => setEditForm({ ...editForm, student_id: e.target.value })}
               />
+            )}
+            {editUser?.role !== 'admin' && (
+              <>
+                <select
+                  value={editForm.faculty}
+                  onChange={(e) => setEditForm({ ...editForm, faculty: e.target.value, department: '' })}
+                  className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                >
+                  <option value="">Select Faculty…</option>
+                  {faculties?.map((f) => (
+                    <option key={f.id} value={f.name}>{f.name}</option>
+                  ))}
+                </select>
+                <select
+                  value={editForm.department}
+                  onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
+                  className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                  disabled={!editForm.faculty}
+                >
+                  <option value="">Select Department…</option>
+                  {departments
+                    ?.filter((d) => {
+                      const matchedFaculty = faculties?.find((fac) => fac.name === editForm.faculty)
+                      return matchedFaculty ? d.faculty_id === matchedFaculty.id : false
+                    })
+                    ?.map((d) => (
+                      <option key={d.id} value={d.name}>{d.name}</option>
+                    ))}
+                </select>
+              </>
             )}
             <Button onClick={() => editMut.mutate()} loading={editMut.isPending} className="w-full">
               Save changes

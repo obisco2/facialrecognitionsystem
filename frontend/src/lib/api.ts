@@ -204,10 +204,12 @@ export const startEnrollment = (userId: number, fullName: string, cameraSource?:
   if (cameraSource) q.set('camera_source', cameraSource)
   return post<{ status: string }>(`/enrollment/start?${q}`)
 }
-export const uploadEnrollment = (userId: number, files: File[]) => {
+export const uploadEnrollment = (userId: number, files: File[], slotIdx?: number) => {
   const form = new FormData()
   files.forEach((f) => form.append('files', f))
-  return request<{ status: string; count: number }>(`/enrollment/upload?user_id=${userId}`, {
+  const q = new URLSearchParams({ user_id: String(userId) })
+  if (slotIdx !== undefined) q.set('slot_idx', String(slotIdx))
+  return request<{ status: string; count: number }>(`/enrollment/upload?${q}`, {
     method: 'POST',
     body: form,
     headers: {},
@@ -259,5 +261,40 @@ export const getAdminStats = () => get<AdminStats>('/admin/stats')
 // --- Bias ---
 export const runBiasEvaluation = () => post<{ status: string }>('/bias/evaluate')
 export const getBiasResults = () => get<BiasMetrics>('/bias/results')
+
+// --- Faculties & Departments ---
+export interface Faculty {
+  id: number
+  name: string
+}
+export interface Department {
+  id: number
+  faculty_id: number
+  name: string
+  faculty_name?: string
+}
+export const getFaculties = () => get<Faculty[]>('/faculties')
+export const createFaculty = (name: string) => post<{ id: number; status: string }>('/faculties', { name })
+export const deleteFaculty = (id: number) => del<{ status: string }>(`/faculties/${id}`)
+
+export const getDepartments = (facultyId?: number) => {
+  const q = facultyId ? `?faculty_id=${facultyId}` : ''
+  return get<Department[]>(`/departments${q}`)
+}
+export const createDepartment = (facultyId: number, name: string) =>
+  post<{ id: number; status: string }>('/departments', { faculty_id: facultyId, name })
+export const deleteDepartment = (id: number) => del<{ status: string }>(`/departments/${id}`)
+
+// --- Liveness verification ---
+export const verifyLiveness = (userId: number, fileOpen: File, fileClosed: File) => {
+  const form = new FormData()
+  form.append('file_open', fileOpen)
+  form.append('file_closed', fileClosed)
+  return request<{ status: string; message: string }>(`/enrollment/liveness?user_id=${userId}`, {
+    method: 'POST',
+    body: form,
+    headers: {},
+  })
+}
 
 export { ApiError }

@@ -22,6 +22,17 @@ _HASH_DIGEST = "sha256"
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS faculties (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS departments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    faculty_id INTEGER REFERENCES faculties(id) ON DELETE CASCADE,
+    name       TEXT UNIQUE NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT    UNIQUE NOT NULL,
@@ -31,6 +42,8 @@ CREATE TABLE IF NOT EXISTS users (
     title         TEXT,
     student_id    TEXT,
     email         TEXT,
+    faculty       TEXT,
+    department    TEXT,
     face_enrolled INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -68,6 +81,7 @@ CREATE TABLE IF NOT EXISTS students (
     student_id      INTEGER PRIMARY KEY AUTOINCREMENT,
     full_name       VARCHAR(100) NOT NULL,
     matric_number   VARCHAR(20) UNIQUE NOT NULL,
+    faculty         VARCHAR(100),
     department      VARCHAR(100) NOT NULL,
     level           VARCHAR(10) NOT NULL,
     face_encoding   BLOB DEFAULT NULL,
@@ -153,6 +167,16 @@ class DatabaseManager:
     def _init_schema(self):
         with self._conn:
             self._conn.executescript(_SCHEMA)
+            # Run safe migrations for new columns
+            for tbl, col, coltype in [
+                ("users", "faculty", "TEXT"),
+                ("users", "department", "TEXT"),
+                ("students", "faculty", "VARCHAR(100)"),
+            ]:
+                try:
+                    self._conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
+                except sqlite3.OperationalError:
+                    pass # Column already exists
 
     def _seed_defaults(self):
         """Create a default admin account on first run if no users exist."""
@@ -165,6 +189,85 @@ class DatabaseManager:
                 full_name="System Administrator",
             )
             logger.info("Default admin account created (admin/admin)")
+
+        # Seed UNILAG faculties and departments if empty
+        cur = self._conn.execute("SELECT COUNT(*) FROM faculties")
+        if cur.fetchone()[0] == 0:
+            unilag_data = {
+                "Faculty of Engineering": [
+                    "Computer Engineering",
+                    "Electrical & Electronics Engineering",
+                    "Mechanical Engineering",
+                    "Civil & Environmental Engineering",
+                    "Chemical & Polymer Engineering",
+                    "Metallurgical & Materials Engineering",
+                    "Systems Engineering",
+                ],
+                "Faculty of Science": [
+                    "Computer Science",
+                    "Mathematics",
+                    "Physics",
+                    "Chemistry",
+                    "Cell Biology & Genetics",
+                    "Microbiology",
+                    "Biochemistry",
+                    "Marine Sciences",
+                    "Botany",
+                ],
+                "Faculty of Social Sciences": [
+                    "Economics",
+                    "Mass Communication",
+                    "Sociology",
+                    "Psychology",
+                    "Geography",
+                    "Political Science",
+                ],
+                "Faculty of Arts": [
+                    "English",
+                    "History & Strategic Studies",
+                    "Linguistics",
+                    "Creative Arts",
+                    "Philosophy",
+                ],
+                "Faculty of Environmental Sciences": [
+                    "Architecture",
+                    "Estate Management",
+                    "Quantity Surveying",
+                    "Urban & Regional Planning",
+                    "Building",
+                ],
+                "Faculty of Law": [
+                    "Private and Property Law",
+                    "Public Law",
+                    "Commercial and Industrial Law",
+                    "Jurisprudence and International Law",
+                ],
+                "College of Medicine": [
+                    "Medicine and Surgery",
+                    "Dentistry",
+                    "Pharmacy",
+                    "Nursing Science",
+                    "Physiotherapy",
+                    "Medical Laboratory Science",
+                    "Physiology",
+                ],
+                "Faculty of Management Sciences": [
+                    "Accounting",
+                    "Finance",
+                    "Actuarial Science",
+                    "Business Administration",
+                    "Industrial Relations and Personnel Management",
+                ],
+            }
+            with self._conn:
+                for fac, depts in unilag_data.items():
+                    self._conn.execute("INSERT OR IGNORE INTO faculties (name) VALUES (?)", (fac,))
+                    fac_row = self._conn.execute("SELECT id FROM faculties WHERE name = ?", (fac,)).fetchone()
+                    if fac_row:
+                        fac_id = fac_row[0]
+                        for dept in depts:
+                            self._conn.execute("INSERT OR IGNORE INTO departments (faculty_id, name) VALUES (?, ?)", (fac_id, dept))
+            logger.info("Default UNILAG faculties and departments seeded successfully")
 
     def _row_to_dict(self, row) -> dict:
         return dict(row) if row else None
@@ -185,7 +288,8 @@ class DatabaseManager:
     def create_user(self, username: str, password: str, role: str,
                     full_name: str, student_id: str = None,
                     email: str = None, title: str = None,
-                    department: str = None, level: str = None) -> int:
+                    department: str = None, level: str = None,
+                    faculty: str = None) -> int:
         """
         Create a new user account.
 
@@ -233,9 +337,9 @@ class DatabaseManager:
             with self._conn:
                 cur = self._conn.execute(
                     """INSERT INTO users
-                       (username, password_hash, role, full_name, title, student_id, email)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (username, _hash(password), role, full_name, title, student_id, email),
+                       (username, password_hash, role, full_name, title, student_id, email, faculty, department)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (username, _hash(password), role, full_name, title, student_id, email, faculty, department),
                 )
                 user_id = cur.lastrowid
                 
@@ -244,11 +348,12 @@ class DatabaseManager:
                     matric = student_id if student_id else username
                     dept = department if department else "Computer Engineering"
                     lvl = level if level else "500 Level"
+                    fac = faculty if faculty else "Faculty of Engineering"
                     self._conn.execute(
                         """INSERT INTO students
-                           (full_name, matric_number, department, level)
-                           VALUES (?, ?, ?, ?)""",
-                        (full_name, matric, dept, lvl)
+                           (full_name, matric_number, department, level, faculty)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (full_name, matric, dept, lvl, fac)
                     )
             logger.info("Created user '%s' (role=%s)", username, role)
             return user_id
@@ -325,16 +430,36 @@ class DatabaseManager:
         Update arbitrary user fields. Pass keyword args matching column names.
         Use update_password() for password changes.
         """
-        allowed = {"username", "role", "full_name", "title", "student_id", "email", "face_enrolled"}
+        allowed = {"username", "role", "full_name", "title", "student_id", "email", "face_enrolled", "faculty", "department"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if "full_name" in updates and updates["full_name"]:
             updates["full_name"] = updates["full_name"].strip()
         if not updates:
             return False
+        
+        user_before = self.get_user(user_id)
         cols = ", ".join(f"{k} = ?" for k in updates)
         vals = list(updates.values()) + [user_id]
         with self._conn:
             self._conn.execute(f"UPDATE users SET {cols} WHERE id = ?", vals)
+            
+            # Sync to students table if student
+            if user_before and user_before["role"] == "student":
+                orig_matric = user_before["student_id"] if user_before["student_id"] else user_before["username"]
+                stud_updates = {}
+                if "full_name" in updates:
+                    stud_updates["full_name"] = updates["full_name"]
+                if "student_id" in updates:
+                    stud_updates["matric_number"] = updates["student_id"]
+                if "department" in updates:
+                    stud_updates["department"] = updates["department"]
+                if "faculty" in updates:
+                    stud_updates["faculty"] = updates["faculty"]
+                
+                if stud_updates:
+                    s_cols = ", ".join(f"{k} = ?" for k in stud_updates)
+                    s_vals = list(stud_updates.values()) + [orig_matric]
+                    self._conn.execute(f"UPDATE students SET {s_cols} WHERE matric_number = ?", s_vals)
         return True
 
     def update_password(self, user_id: int, new_password: str) -> bool:
@@ -777,3 +902,41 @@ class DatabaseManager:
             "total_attendance": self._conn.execute("SELECT COUNT(*) FROM attendance_log").fetchone()[0],
             "enrolled_faces":   self._conn.execute("SELECT COUNT(*) FROM users WHERE face_enrolled=1").fetchone()[0],
         }
+
+    # ------------------------------------------------------------------ #
+    #  Faculties & Departments CRUD                                       #
+    # ------------------------------------------------------------------ #
+
+    def get_faculties(self) -> list:
+        rows = self._conn.execute("SELECT * FROM faculties ORDER BY name").fetchall()
+        return self._rows_to_list(rows)
+
+    def get_departments(self, faculty_id: int = None) -> list:
+        if faculty_id:
+            rows = self._conn.execute("SELECT * FROM departments WHERE faculty_id = ? ORDER BY name", (faculty_id,)).fetchall()
+        else:
+            rows = self._conn.execute(
+                """SELECT d.*, f.name as faculty_name 
+                   FROM departments d 
+                   JOIN faculties f ON d.faculty_id = f.id 
+                   ORDER BY f.name, d.name"""
+            ).fetchall()
+        return self._rows_to_list(rows)
+
+    def create_faculty(self, name: str) -> int:
+        with self._conn:
+            cur = self._conn.execute("INSERT INTO faculties (name) VALUES (?)", (name.strip(),))
+            return cur.lastrowid
+
+    def create_department(self, faculty_id: int, name: str) -> int:
+        with self._conn:
+            cur = self._conn.execute("INSERT INTO departments (faculty_id, name) VALUES (?, ?)", (faculty_id, name.strip()))
+            return cur.lastrowid
+
+    def delete_faculty(self, id: int):
+        with self._conn:
+            self._conn.execute("DELETE FROM faculties WHERE id = ?", (id,))
+
+    def delete_department(self, id: int):
+        with self._conn:
+            self._conn.execute("DELETE FROM departments WHERE id = ?", (id,))

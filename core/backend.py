@@ -347,6 +347,7 @@ class UserCreateRequest(BaseModel):
     email: Optional[str] = None  # Required for students
     department: Optional[str] = None
     level: Optional[str] = None
+    faculty: Optional[str] = None
 
 class UserUpdateRequest(BaseModel):
     full_name: Optional[str] = None
@@ -356,6 +357,8 @@ class UserUpdateRequest(BaseModel):
     student_id: Optional[str] = None
     email: Optional[str] = None
     face_enrolled: Optional[int] = None
+    department: Optional[str] = None
+    faculty: Optional[str] = None
 
 class PasswordResetRequest(BaseModel):
     new_password: str
@@ -365,6 +368,13 @@ class ClassCreateRequest(BaseModel):
     code: str
     schedule: Optional[str] = None
     room: Optional[str] = None
+
+class FacultyCreateRequest(BaseModel):
+    name: str
+
+class DepartmentCreateRequest(BaseModel):
+    faculty_id: int
+    name: str
 
 class ManualAttendanceRequest(BaseModel):
     student_id: int
@@ -427,7 +437,8 @@ def create_user(req: UserCreateRequest):
             student_id=req.student_id,
             email=req.email,
             department=req.department,
-            level=req.level
+            level=req.level,
+            faculty=req.faculty
         )
         return {"id": user_id, "username": req.username, "role": req.role}
     except ValueError as e:
@@ -618,11 +629,29 @@ def recognize_frame(req: RecognizeFrameRequest):
     # Build results
     recognized = []
     for (top, right, bottom, left), name, dist in zip(locations, names, distances):
-        is_known = (name != "Unknown")
+        # Laplacian variance check on the cropped face region
+        h, w = frame.shape[:2]
+        t_scaled, r_scaled, b_scaled, l_scaled = int(top), int(right), int(bottom), int(left)
+        y1, y2 = max(0, t_scaled), min(h, b_scaled)
+        x1, x2 = max(0, l_scaled), min(w, r_scaled)
+        face_img = frame[y1:y2, x1:x2]
+        
+        is_live = True
+        liveness_score = 0.0
+        if face_img.size > 0:
+            gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+            liveness_score = float(cv2.Laplacian(gray_face, cv2.CV_64F).var())
+            # A genuine live webcam face is typically between 40.0 and 8000.0
+            if liveness_score < 40.0 or liveness_score > 9000.0:
+                is_live = False
+
+        is_known = (name != "Unknown") and is_live
         recognized.append({
             "name": name if is_known else None,
             "confidence": round(dist, 4) if dist is not None else None,
             "is_known": is_known,
+            "is_live": is_live,
+            "liveness_score": liveness_score,
             "box": {
                 "top": int(top / scale),
                 "right": int(right / scale),
@@ -675,21 +704,22 @@ def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/upload")
-async def upload_enrollment(user_id: int, files: list[UploadFile] = File(...)):
+async def upload_enrollment(user_id: int, slot_idx: Optional[int] = None, files: list[UploadFile] = File(...)):
     try:
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
         import shutil
-        if os.path.exists(temp_dir):
+        if slot_idx is None and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         os.makedirs(temp_dir, exist_ok=True)
         
         saved_paths = []
         for i, file in enumerate(files[:5]):
-            target_path = os.path.join(temp_dir, f"capture_{i}.jpg")
+            idx = slot_idx if slot_idx is not None else i
+            target_path = os.path.join(temp_dir, f"capture_{idx}.jpg")
             content = await file.read()
             with open(target_path, "wb") as f:
                 f.write(content)
-            saved_paths.append(f"/data/known_faces/__temp_{user_id}__/capture_{i}.jpg")
+            saved_paths.append(f"/data/known_faces/__temp_{user_id}__/capture_{idx}.jpg")
             
         return {"status": "ok", "count": len(saved_paths), "files": saved_paths}
     except Exception as e:
@@ -731,6 +761,110 @@ def get_enrollment_capture(user_id: int, slot_idx: int):
         media_type="image/jpeg",
         headers={"Cache-Control": "no-cache"},
     )
+
+def calculate_ear(eye_points):
+    import math
+    # Euclidean distances between vertical eye landmarks
+    a = math.dist(eye_points[1], eye_points[5])
+    b = math.dist(eye_points[2], eye_points[4])
+    # Euclidean distance between horizontal eye landmarks
+    c = math.dist(eye_points[0], eye_points[3])
+    if c == 0:
+        return 0.0
+    return (a + b) / (2.0 * c)
+
+def verify_blink(img_open, img_closed):
+    import face_recognition
+    landmarks_open = face_recognition.face_landmarks(img_open)
+    landmarks_closed = face_recognition.face_landmarks(img_closed)
+    if not landmarks_open or not landmarks_closed:
+        return False, "Could not locate eye features in both images"
+    
+    lo = landmarks_open[0]
+    lc = landmarks_closed[0]
+    if "left_eye" not in lo or "right_eye" not in lo or "left_eye" not in lc or "right_eye" not in lc:
+        return False, "Facial eye details are incomplete"
+
+    ear_open_left = calculate_ear(lo["left_eye"])
+    ear_open_right = calculate_ear(lo["right_eye"])
+    ear_open = (ear_open_left + ear_open_right) / 2.0
+    
+    ear_closed_left = calculate_ear(lc["left_eye"])
+    ear_closed_right = calculate_ear(lc["right_eye"])
+    ear_closed = (ear_closed_left + ear_closed_right) / 2.0
+    
+    if ear_open < 0.22:
+        return False, f"Please keep your eyes fully open for the first photo (EAR: {ear_open:.2f})"
+    if ear_closed > 0.20:
+        return False, f"Please close your eyes completely for the second photo (EAR: {ear_closed:.2f})"
+    if (ear_open - ear_closed) < 0.05:
+        return False, "Blink challenge failed: eyes were not closed in the second snap"
+        
+    return True, "Liveness verified"
+
+@app.post("/api/enrollment/liveness")
+async def verify_enrollment_liveness(user_id: int, file_open: UploadFile = File(...), file_closed: UploadFile = File(...)):
+    try:
+        import face_recognition as _fr
+        import math
+        content_open = await file_open.read()
+        content_closed = await file_closed.read()
+        
+        import numpy as np
+        nparr_o = np.frombuffer(content_open, np.uint8)
+        img_o = cv2.imdecode(nparr_o, cv2.IMREAD_COLOR)
+        
+        nparr_c = np.frombuffer(content_closed, np.uint8)
+        img_c = cv2.imdecode(nparr_c, cv2.IMREAD_COLOR)
+        
+        if img_o is None or img_c is None:
+            raise HTTPException(status_code=400, detail="Cannot decode image uploads")
+            
+        # Run blink checks on resized versions for speed
+        small_o = cv2.resize(img_o, (0, 0), fx=0.5, fy=0.5)
+        small_c = cv2.resize(img_c, (0, 0), fx=0.5, fy=0.5)
+        
+        success, msg = verify_blink(small_o, small_c)
+        if not success:
+            raise HTTPException(status_code=400, detail=msg)
+            
+        # Verify matching of the open eye photo against the enrollment slots
+        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+        encs_o = _fr.face_encodings(img_o)
+        if not encs_o:
+            raise HTTPException(status_code=400, detail="No face detected in live photo")
+        live_enc = encs_o[0]
+        
+        match_count = 0
+        total_checked = 0
+        for i in range(5):
+            path = os.path.join(temp_dir, f"capture_{i}.jpg")
+            if os.path.exists(path):
+                t_img = cv2.imread(path)
+                if t_img is not None:
+                    t_encs = _fr.face_encodings(t_img)
+                    if t_encs:
+                        total_checked += 1
+                        dist = float(_fr.face_distance([live_enc], t_encs[0])[0])
+                        if dist <= 0.52:
+                            match_count += 1
+                            
+        if total_checked > 0 and match_count < math.ceil(total_checked / 2):
+            raise HTTPException(
+                status_code=400, 
+                detail="Live photo does not match your uploaded photos (impersonation check failed)"
+            )
+            
+        # Save verification marker
+        filepath = os.path.join(temp_dir, "capture_5.jpg")
+        with open(filepath, "wb") as f:
+            f.write(content_open)
+            
+        return {"status": "ok", "message": "Liveness and matches verified successfully"}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/validate")
 def validate_enrollment(user_id: int):
@@ -875,6 +1009,15 @@ def confirm_enrollment(user_id: int, full_name: str):
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
     person_temp_dir = os.path.join(temp_dir, full_name)
     final_dir = os.path.join(config.known_faces_dir, full_name)
+    
+    # Check that liveness verification file capture_5.jpg exists
+    liveness_file1 = os.path.join(temp_dir, "capture_5.jpg")
+    liveness_file2 = os.path.join(person_temp_dir, "capture_5.jpg")
+    if not os.path.exists(liveness_file1) and not os.path.exists(liveness_file2):
+        raise HTTPException(
+            status_code=400,
+            detail="Face enrollment requires liveness check (blink test) to prevent spoofing. Please complete the liveness test first."
+        )
     
     import shutil
     if os.path.exists(final_dir):
@@ -1094,6 +1237,40 @@ def export_attendance_data(class_id: int, date: str = None, date_from: str = Non
         "content": content,
         "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if format == "xlsx" else "text/csv"
     }
+
+@app.get("/api/faculties")
+def get_faculties():
+    return db.get_faculties()
+
+@app.post("/api/faculties")
+def create_faculty(req: FacultyCreateRequest):
+    try:
+        fid = db.create_faculty(req.name)
+        return {"id": fid, "status": "ok"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/faculties/{id}")
+def delete_faculty(id: int):
+    db.delete_faculty(id)
+    return {"status": "ok"}
+
+@app.get("/api/departments")
+def get_departments(faculty_id: Optional[int] = None):
+    return db.get_departments(faculty_id)
+
+@app.post("/api/departments")
+def create_department(req: DepartmentCreateRequest):
+    try:
+        did = db.create_department(req.faculty_id, req.name)
+        return {"id": did, "status": "ok"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/departments/{id}")
+def delete_department(id: int):
+    db.delete_department(id)
+    return {"status": "ok"}
 
 # Mount the data folder for captured thumbnails
 app.mount("/data", StaticFiles(directory=os.path.join(config.base_dir, "data")), name="data")
