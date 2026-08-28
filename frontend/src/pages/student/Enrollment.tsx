@@ -43,10 +43,31 @@ export default function StudentEnrollment() {
         video: { width: 640, height: 480, facingMode: 'user' },
       })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-        setCameraActive(true)
+      
+      const bindStream = async () => {
+        const videoEl = videoRef.current || document.querySelector('video')
+        if (videoEl) {
+          videoEl.srcObject = stream
+          try {
+            await videoEl.play()
+            setCameraActive(true)
+            return true
+          } catch (e) {
+            console.error('Play error:', e)
+          }
+        }
+        return false
+      }
+
+      const bound = await bindStream()
+      if (!bound) {
+        // Retry shortly in case ref resolution lags behind DOM render paint
+        setTimeout(async () => {
+          const rebound = await bindStream()
+          if (!rebound) {
+            setCameraError('Camera display container not found. Please refresh.')
+          }
+        }, 200)
       }
     } catch (err) {
       setCameraError(err instanceof Error ? err.message : 'Camera access denied')
@@ -345,7 +366,51 @@ export default function StudentEnrollment() {
                     ) : hasPhoto ? (
                       <Check className="size-5 text-graphite-ink" />
                     ) : (
-                      <span className="font-mono-label text-graphite-ink-2">{idx + 1}</span>
+                      <div className="flex flex-col items-center gap-1.5 p-1 text-center">
+                        <span className="font-mono-label text-[10px] text-graphite-ink-3">Slot {idx + 1}</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCapture(idx)
+                            }}
+                            title="Shoot snapshot"
+                            className="flex size-6 items-center justify-center rounded bg-paper/10 text-graphite-ink hover:bg-paper/20 hover:text-accent"
+                          >
+                            <Camera className="size-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const input = document.createElement('input')
+                              input.type = 'file'
+                              input.accept = 'image/*'
+                              input.onchange = async (e) => {
+                                const file = (e.target as HTMLInputElement).files?.[0]
+                                if (!file) return
+                                if (!started) {
+                                  await startEnrollment(user!.id, user!.full_name)
+                                  setStarted(true)
+                                }
+                                setBusy(true)
+                                try {
+                                  await uploadEnrollment(user!.id, [file])
+                                  setCaptured((c) => ({ ...c, [idx]: true }))
+                                  setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(file) }))
+                                  setResults(null)
+                                } finally {
+                                  setBusy(false)
+                                }
+                              }
+                              input.click()
+                            }}
+                            title="Upload photo"
+                            className="flex size-6 items-center justify-center rounded bg-paper/10 text-graphite-ink hover:bg-paper/20 hover:text-accent"
+                          >
+                            <Upload className="size-3.5" />
+                          </button>
+                        </div>
+                      </div>
                     )}
 
                     {/* Overlay actions on hover when photo exists */}
@@ -369,48 +434,7 @@ export default function StudentEnrollment() {
                     )}
                   </div>
 
-                  <div className="flex justify-center gap-1">
-                    {!hasPhoto && (
-                      <>
-                        <button
-                          onClick={() => handleCapture(idx)}
-                          className="font-mono-label text-graphite-ink-2 hover:text-accent"
-                        >
-                          shoot
-                        </button>
-                        <span className="text-graphite-ink-2">·</span>
-                        <button
-                          onClick={() => {
-                            // Trigger file input for single-slot upload
-                            const input = document.createElement('input')
-                            input.type = 'file'
-                            input.accept = 'image/*'
-                            input.onchange = async (e) => {
-                              const file = (e.target as HTMLInputElement).files?.[0]
-                              if (!file) return
-                              if (!started) {
-                                await startEnrollment(user!.id, user!.full_name)
-                                setStarted(true)
-                              }
-                              setBusy(true)
-                              try {
-                                await uploadEnrollment(user!.id, [file])
-                                setCaptured((c) => ({ ...c, [idx]: true }))
-                                setPreviews((p) => ({ ...p, [idx]: URL.createObjectURL(file) }))
-                                setResults(null)
-                              } finally {
-                                setBusy(false)
-                              }
-                            }
-                            input.click()
-                          }}
-                          className="font-mono-label text-graphite-ink-2 hover:text-accent"
-                        >
-                          upload
-                        </button>
-                      </>
-                    )}
-                  </div>
+                  <div className="flex justify-center gap-1"></div>
                   {result && <p className="mt-0.5 text-[0.6rem] text-graphite-ink-2">{result.message}</p>}
                 </div>
               )
