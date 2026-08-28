@@ -78,18 +78,17 @@ export default function StudentEnrollment() {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop())
-      }
+    if (started) {
+      startCamera()
+    } else {
+      stopCamera()
     }
-  }, [])
+  }, [started, startCamera, stopCamera])
 
   async function handleStart() {
     setBusy(true)
     try {
       await startEnrollment(user!.id, user!.full_name)
-      await startCamera()
       setStarted(true)
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Failed to start enrollment')
@@ -172,20 +171,27 @@ export default function StudentEnrollment() {
     }
   }
 
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop())
+      }
+    }
+  }, [])
+
   async function handleSnapReplace(idx: number) {
     // Start camera if not started, then capture into a specific slot
     if (!started) {
       setBusy(true)
       try {
         await startEnrollment(user!.id, user!.full_name)
-        await startCamera()
         setStarted(true)
       } finally {
         setBusy(false)
       }
     }
     // Small delay to let the camera stream initialize
-    await new Promise((r) => setTimeout(r, 300))
+    await new Promise((r) => setTimeout(r, 600))
     await handleCapture(idx)
   }
 
@@ -224,7 +230,6 @@ export default function StudentEnrollment() {
       setPreviews({})
       setResults(null)
       setCanProceed(false)
-      await startCamera()
       setStarted(true)
     } catch (err) {
       showToast('error', err instanceof Error ? err.message : 'Failed to re-enroll')
