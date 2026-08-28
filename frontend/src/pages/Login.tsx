@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ScanFace, User as UserIcon, Lock, ArrowRight } from 'lucide-react'
+import { ScanFace, Mail, Lock, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { login, ApiError } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
 export default function Login() {
-  const [username, setUsername] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -19,7 +19,7 @@ export default function Login() {
     setError(null)
     setLoading(true)
     try {
-      const user = await login(username, password)
+      const user = await login(identifier, password)
       setUser(user)
       navigate(`/${user.role}`)
     } catch (err) {
@@ -44,15 +44,15 @@ export default function Login() {
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div>
-              <label htmlFor="username" className="mb-1.5 block text-sm font-medium text-ink-2">
-                Username
+              <label htmlFor="identifier" className="mb-1.5 block text-sm font-medium text-ink-2">
+                Matric No. / Email
               </label>
               <Input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                icon={<UserIcon />}
-                placeholder="Enter username"
+                id="identifier"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                icon={<Mail />}
+                placeholder="Enter matric number or email"
                 autoComplete="username"
                 required
               />

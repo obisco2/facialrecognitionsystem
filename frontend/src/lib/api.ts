@@ -47,6 +47,7 @@ export interface User {
   username: string
   role: Role
   full_name: string
+  title?: string | null  // Dr., Professor, etc.
   student_id?: string | null
   email?: string | null
   department?: string | null
@@ -117,8 +118,8 @@ export interface SystemConfig {
 }
 
 // --- Auth ---
-export const login = (username: string, password: string) =>
-  post<User>('/auth/login', { username, password })
+export const login = (identifier: string, password: string) =>
+  post<User>('/auth/login', { identifier, password })
 
 // --- Users ---
 export const getUsers = (role?: Role) => get<User[]>(`/users${role ? `?role=${role}` : ''}`)

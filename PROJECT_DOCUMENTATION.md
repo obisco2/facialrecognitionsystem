@@ -207,16 +207,20 @@ Measuring accuracy across skin type x gender combinations reveals which subgroup
 
 ### 8.1 Test Coverage
 
-| Module | Functions | Covered |
-|--------|-----------|---------|
-| Config | 8 | 8 |
-| FaceDetector | 5 | 5 |
-| FaceEncoder | 9 | 9 |
-| DataCollector | 4 | 3 |
-| Recognizer | 6 | 6 |
-| AttendanceManager | 7 | 7 |
-| BiasEvaluator | 7 | 5 |
-| **Total** | **46** | **43** |
+Unit tests are implemented using `pytest` with coverage tracking via `pytest-cov`. Tests cover core modules with mocked dependencies to avoid requiring a live camera or dlib models at test time.
+
+| Module | Test File | Functions Tested |
+|--------|-----------|-----------------|
+| Config | `tests/test_config.py` | Singleton creation, property access, defaults |
+| DatabaseManager | `tests/test_database.py` | CRUD operations, authentication, attendance dedup, password hashing |
+| FaceDetector | `tests/test_face_detector.py` | Haar cascade init, face detection, bounding box format |
+| BiasEvaluator | `tests/test_bias_evaluator.py` | Metrics computation, disparity report, annotation loading |
+
+Run the full test suite:
+
+```bash
+pytest tests/ -v --cov=core --cov=bias --cov-report=term-missing
+```
 
 ### 8.2 Performance
 
@@ -254,21 +258,27 @@ The evaluation module produces per-group accuracy metrics. The disparity report 
 
 The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. Liveness detection is not implemented, so photos or videos could spoof the system.
 
-## 10. Real-World Cloud Deployment (VPS Challenges & Solutions)
+## 10. Deployment Architecture
 
-Deploying AttendIQ to a cloud container environment (e.g., Hack Club Nest) revealed critical engineering requirements for running real-time computer vision in resource-constrained cloud server hosts:
+AttendIQ supports multiple deployment targets: local desktop (pywebview), headless VPS (systemd + Caddy), and containerised (Docker). This section details the engineering decisions made for cloud VPS deployment on resource-constrained environments.
 
-### 10.1 Memory-Constraint Compilation Avoidance
-Headless Linux VPS containers often run with limited memory (e.g., 2GB RAM). Installing Python dependencies that compile C++ code (like `dlib` from source) triggers compiler pipelines that exhaust all system memory, causing hard OOM crashes.
-*   **Resolution**: Configured a conditional dependency on `dlib-bin` for Linux platforms in `requirements.txt`. The server setup script executes the `face_recognition` installation using the `--no-deps` flag to bypass the local compilation stage entirely. The required system runtime libraries (`libopenblas-dev`, `libgl1`, and `libglib2.0-0`) are installed via the server's package manager.
+### 10.1 Dependency Compilation on Memory-Constrained Hosts
 
-### 10.2 Shared Host Domain Mapping & Reverse Proxying
-Behind a shared host IP, the Proxmox/LXC server blocks direct inbound ports 80/443. Traffic is routed using subdomain CNAME mappings pointing to the host's proxy (`tads.hackclub.app`).
-*   **Resolution**: Configured the Caddyfile in HTTP mode (`http://`) to delegate SSL termination to the Nest host proxy. This prevents ACME TLS handshake errors inside the container while ensuring secure external access.
+Headless Linux VPS containers (e.g., 2GB RAM) cannot compile C++ dependencies like `dlib` from source — the compiler exhausts available memory and triggers OOM kills.
 
-### 10.3 Core Processing Performance and SegFault Mitigation
-Running real-time image evaluation calls (`/api/recognize/frame`) in rapid succession could segfault (SEGV) the uvicorn process due to race conditions from reloading dlib weights and the face image database on every frame request.
-*   **Resolution**: Refactored the backend to use a globally cached `Recognizer` instance in memory. It lazy-loads once on startup and only invalidates when a new student confirms enrollment or a user triggers a retraining process. This prevents concurrent disk I/O, boosts request processing, and eliminates Segmentation Fault crashes under load.
+**Solution**: The `requirements.txt` conditionally installs `dlib-bin` (pre-compiled wheels) on Linux, and the server setup script installs `face_recognition` with `--no-deps` to bypass local compilation. Required system runtime libraries (`libopenblas-dev`, `libgl1`, `libglib2.0-0`) are installed via the package manager.
+
+### 10.2 Reverse Proxy and SSL Termination
+
+Behind a shared-host reverse proxy (e.g., Proxmox/LXC), direct inbound ports 80/443 are blocked. Traffic is routed via subdomain CNAME mappings to the host proxy.
+
+**Solution**: Caddy is configured in HTTP mode (`http://`) to delegate SSL termination to the upstream proxy. This prevents ACME TLS handshake failures inside the container while maintaining secure external access via HTTPS.
+
+### 10.3 Process Stability Under Load
+
+Rapid sequential calls to `/api/recognize/frame` could trigger segmentation faults (SEGV) in the uvicorn process due to race conditions from reloading dlib weights and the face database on every request.
+
+**Solution**: The backend uses a globally cached `Recognizer` singleton that lazy-loads once on startup and invalidates only when a student enrolls or a retrain is triggered. This eliminates concurrent disk I/O, reduces per-request latency, and prevents crash-to-restart loops.
 
 ---
 
@@ -287,12 +297,39 @@ Running real-time image evaluation calls (`/api/recognize/frame`) in rapid succe
 1. **Why dlib as primary with LBPH fallback?** dlib's 128-D ResNet models produce higher accuracy (~95%+) and need only one enrollment image. LBPH ensures the system runs on any machine without CMake or C++ compiler toolchains.
 2. **How does tolerance work?** For dlib, tolerance is the Euclidean distance threshold in the 128-D vector space. 0.6 is the standard; lower values are stricter. For LBPH, it maps to the normalized histogram matching distance.
 3. **What causes bias?** Training dataset composition (demographic imbalance), camera placement and angles, and room lighting all contribute.
-4. **How would you deploy this in production?** Move from SQLite to PostgreSQL, add TLS/HTTPS, use hardware-accelerated CNN models, and add liveness detection (blink analysis or 3D depth).
-5. **What about GDPR?** The system requires explicit enrollment and provides deletion. A production build would need a privacy notice, consent management, and biometric data encryption.
+4. **How would you deploy this in production?** Docker Compose for reproducible deployments, move from SQLite to PostgreSQL, add TLS/HTTPS via reverse proxy, use hardware-accelerated CNN models, and add liveness detection (blink analysis or 3D depth).
+5. **What about GDPR?** The system requires explicit enrollment and provides deletion. Passwords are stored with PBKDF2-SHA256 (260K iterations, random salt). A production build would need a privacy notice, consent management, and biometric data encryption.
+6. **How do you handle security?** Rate limiting on all endpoints (30 req/min general, 5 attempts/min on login), PBKDF2 password hashing with automatic legacy hash upgrade, input validation on frame sizes, and parameterised SQL queries prevent injection.
+7. **Why Docker?** Ensures the application runs identically across development, testing, and production. The Dockerfile includes a health check, and docker-compose handles volume mounting for persistent data.
 
 ---
 
-## 12. Conclusion
+## 12. Limitations and Future Work
+
+### 12.1 Current Limitations
+
+| Area | Limitation | Impact |
+|------|-----------|--------|
+| **Liveness Detection** | No anti-spoofing — photos or video replays can fool the system | Security risk in uncontrolled environments |
+| **Lighting Sensitivity** | Haar Cascade accuracy degrades under harsh shadows or backlighting | Reduced detection rate in poorly lit rooms |
+| **Single Camera** | Only one camera stream active at a time | Cannot cover multiple entrance points simultaneously |
+| **Database** | SQLite is single-writer; no concurrent write scaling | Unsuitable for multi-server horizontal deployment |
+| **Authentication** | No JWT/session tokens; frontend-only route protection | API endpoints accessible without auth headers |
+| **Bias Dataset** | Evaluation requires manually annotated demographic images | Results depend on dataset size and representativeness |
+
+### 12.2 Future Improvements
+
+1. **Anti-Spoofing**: Implement liveness detection using blink analysis, texture analysis (LBP), or 3D depth estimation to prevent photo/video replay attacks.
+2. **JWT Authentication**: Add stateless token-based auth with refresh tokens and role-based middleware on the API layer.
+3. **PostgreSQL Migration**: Replace SQLite with PostgreSQL for concurrent write support and production-grade reliability.
+4. **CNN-Based Detection**: Upgrade from Haar Cascade to MTCNN or RetinaFace for higher detection accuracy across demographics.
+5. **CI/CD Pipeline**: Add GitHub Actions for automated testing, linting, and container builds on every push.
+6. **Multi-Camera Support**: Extend the streaming architecture to aggregate frames from multiple camera sources.
+7. **Attendance Analytics**: Build dashboards with trend analysis, anomaly detection (e.g., sudden drops in attendance), and automated alerts for lecturers.
+
+---
+
+## 13. Conclusion
 
 This project demonstrates that a functional facial recognition attendance system is achievable with open-source tools, and that bias evaluation is a necessary complement to deployment. The integration of three reference implementations produced a cleaner codebase with improved error handling, configuration management, and a web-based UI. The bias evaluation module provides the transparency needed for responsible use.
 
@@ -304,7 +341,7 @@ Key contributions:
 
 ---
 
-## 13. References
+## 14. References
 
 1. Buolamwini, J. and Gebru, T. (2018). "Gender Shades." PMLR 81:1-15.
 2. King, D.E. (2009). "Dlib-ml." JMLR 10:1755-1758.
@@ -316,7 +353,7 @@ Key contributions:
 
 ---
 
-## 14. Appendices
+## 15. Appendices
 
 ### Appendix A: Installation Commands
 
@@ -337,6 +374,23 @@ pip install -r requirements.txt
 cd frontend && bun install
 ```
 
+Docker setup:
+
+```bash
+# Build and run with Docker Compose
+docker compose up -d --build
+
+# Or build manually
+docker build -t attendiq .
+docker run -p 8000:8000 -v ./data:/app/data attendiq
+```
+
+Running tests:
+
+```bash
+pytest tests/ -v --cov=core --cov=bias --cov-report=term-missing
+```
+
 ### Appendix B: Configuration Reference
 
 See `config.ini` for all configurable parameters.
@@ -349,17 +403,22 @@ facialrecognitionsystem/
 ├── main_web.py                 # Desktop shell (pywebview)
 ├── config.ini                  # Configuration file
 ├── requirements.txt            # Python dependencies
+├── pyproject.toml              # Pytest configuration
 ├── setup.sh / setup.ps1        # Installer scripts
 ├── dev.sh / dev.ps1            # Dev servers launcher
 ├── build.sh / build.ps1        # Frontend build scripts
+├── Dockerfile                  # Container build definition
+├── docker-compose.yml          # Container orchestration
+├── .env.example                # Environment variable template
+├── LICENSE                     # MIT License
 ├── PROJECT_DOCUMENTATION.md    # This file
 ├── README.md                   # Project readme
 │
 ├── core/                       # Core system logic
 │   ├── __init__.py
 │   ├── config.py               # Config loader (singleton)
-│   ├── database.py             # SQLite database layer
-│   ├── backend.py              # FastAPI REST API and camera streaming
+│   ├── database.py             # SQLite database layer (PBKDF2 hashing)
+│   ├── backend.py              # FastAPI REST + rate limiting + health check
 │   ├── face_detector.py        # Face detection (Haar/DNN)
 │   ├── face_encoder.py         # Face encoding (dlib/LBPH fallback)
 │   ├── data_collector.py       # Training capture helper
@@ -375,6 +434,13 @@ facialrecognitionsystem/
 │   ├── __init__.py
 │   ├── evaluator.py            # Accuracy metrics computer
 │   └── datasets.py             # Dataset helpers
+│
+├── tests/                      # Unit tests (pytest)
+│   ├── __init__.py
+│   ├── test_config.py          # Config singleton tests
+│   ├── test_database.py        # Database CRUD + auth tests
+│   ├── test_face_detector.py   # Face detection tests
+│   └── test_bias_evaluator.py  # Bias evaluation tests
 │
 ├── data/                       # Runtime data
 │   ├── known_faces/            # Enrolled student face images

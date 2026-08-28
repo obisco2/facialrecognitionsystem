@@ -9,9 +9,15 @@ import sqlite3
 import hashlib
 import os
 import logging
+import secrets
 from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
+
+# Password hashing constants
+_HASH_ITERATIONS = 260_000  # OWASP 2023 recommendation for PBKDF2-SHA256
+_HASH_KEYLEN = 32
+_HASH_DIGEST = "sha256"
 
 _SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -22,6 +28,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT    NOT NULL,
     role          TEXT    NOT NULL CHECK(role IN ('admin','lecturer','student')),
     full_name     TEXT    NOT NULL,
+    title         TEXT,
     student_id    TEXT,
     email         TEXT,
     face_enrolled INTEGER NOT NULL DEFAULT 0,
@@ -87,9 +94,39 @@ CREATE INDEX IF NOT EXISTS idx_enrollments_student
 """
 
 
-def _hash(password: str) -> str:
-    """SHA-256 hex digest of a password string."""
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+def _hash(password: str, salt: str = None) -> str:
+    """
+    Hash a password using PBKDF2-SHA256 with a random salt.
+
+    Returns:
+        "salt:digest" string for storage.
+    """
+    if salt is None:
+        salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        _HASH_DIGEST,
+        password.encode("utf-8"),
+        bytes.fromhex(salt),
+        _HASH_ITERATIONS,
+        _HASH_KEYLEN,
+    )
+    return f"{salt}:{digest.hex()}"
+
+
+def _verify(password: str, stored_hash: str) -> bool:
+    """
+    Verify a password against a stored "salt:digest" hash.
+
+    Also handles legacy bare SHA-256 hashes for backward compatibility.
+    """
+    if ":" in stored_hash:
+        salt, _ = stored_hash.split(":", 1)
+        return secrets.compare_digest(_hash(password, salt), stored_hash)
+    # Legacy: bare SHA-256 hash without salt (backward compatible)
+    return secrets.compare_digest(
+        hashlib.sha256(password.encode("utf-8")).hexdigest(),
+        stored_hash,
+    )
 
 
 class DatabaseManager:
@@ -147,7 +184,8 @@ class DatabaseManager:
 
     def create_user(self, username: str, password: str, role: str,
                     full_name: str, student_id: str = None,
-                    email: str = None, department: str = None, level: str = None) -> int:
+                    email: str = None, title: str = None,
+                    department: str = None, level: str = None) -> int:
         """
         Create a new user account.
 
@@ -155,17 +193,25 @@ class DatabaseManager:
             New user's integer ID.
 
         Raises:
-            ValueError: If username already exists.
+            ValueError: If username already exists, or if student_id/email missing for students.
         """
         if full_name:
             full_name = full_name.strip()
+
+        # Enforce compulsory fields for students
+        if role == "student":
+            if not student_id or not student_id.strip():
+                raise ValueError("Matric number (Student ID) is required for students.")
+            if not email or not email.strip():
+                raise ValueError("Email address is required for students.")
+
         try:
             with self._conn:
                 cur = self._conn.execute(
                     """INSERT INTO users
-                       (username, password_hash, role, full_name, student_id, email)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (username, _hash(password), role, full_name, student_id, email),
+                       (username, password_hash, role, full_name, title, student_id, email)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (username, _hash(password), role, full_name, title, student_id, email),
                 )
                 user_id = cur.lastrowid
                 
@@ -185,17 +231,36 @@ class DatabaseManager:
         except sqlite3.IntegrityError:
             raise ValueError(f"Username '{username}' is already taken.")
 
-    def authenticate(self, username: str, password: str) -> dict | None:
+    def authenticate(self, identifier: str, password: str) -> dict | None:
         """
-        Validate credentials.
+        Validate credentials using matric number, email, or username.
+
+        Args:
+            identifier: Matric number, email address, or username.
+            password: Plain-text password.
 
         Returns:
             User dict on success, None on failure.
         """
         row = self._conn.execute(
-            "SELECT * FROM users WHERE username = ? AND password_hash = ?",
-            (username, _hash(password)),
+            """SELECT * FROM users
+               WHERE username = ? OR student_id = ? OR email = ?""",
+            (identifier, identifier, identifier),
         ).fetchone()
+        if row is None:
+            return None
+        stored_hash = row["password_hash"]
+        if not _verify(password, stored_hash):
+            return None
+        # Upgrade legacy hash to salted PBKDF2 on successful login
+        if ":" not in stored_hash:
+            new_hash = _hash(password)
+            self._conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (new_hash, row["id"]),
+            )
+            self._conn.commit()
+            logger.info("Upgraded password hash for user '%s' to PBKDF2", row["username"])
         return self._row_to_dict(row)
 
     def get_user(self, user_id: int) -> dict | None:
@@ -236,7 +301,7 @@ class DatabaseManager:
         Update arbitrary user fields. Pass keyword args matching column names.
         Use update_password() for password changes.
         """
-        allowed = {"username", "role", "full_name", "student_id", "email", "face_enrolled"}
+        allowed = {"username", "role", "full_name", "title", "student_id", "email", "face_enrolled"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if "full_name" in updates and updates["full_name"]:
             updates["full_name"] = updates["full_name"].strip()

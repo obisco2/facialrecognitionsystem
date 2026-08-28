@@ -7,12 +7,13 @@ import threading
 import base64
 import numpy as np
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile
+from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
+from collections import defaultdict
 
 from core.config import Config
 from core.database import DatabaseManager
@@ -27,6 +28,64 @@ logger = logging.getLogger(__name__)
 config = Config()
 config.ensure_dirs()
 db = DatabaseManager(config.db_path)
+
+app = FastAPI(title="AttendIQ API", version="1.0.0")
+
+# --- Structured Logging ---
+logging.basicConfig(
+    level=getattr(logging, config.get("Logging", "LEVEL", fallback="INFO")),
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+request_logger = logging.getLogger("attendiq.requests")
+
+# --- Rate Limiting (in-memory sliding window) ---
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX_REQUESTS = 30  # per window per IP
+_RATE_LIMIT_LOGIN_MAX = 5  # login attempts per window per IP
+_request_counts: dict[str, list[float]] = defaultdict(list)
+_login_counts: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(ip: str, limit: int = _RATE_LIMIT_MAX_REQUESTS) -> bool:
+    """Return True if request is allowed, False if rate limited."""
+    now = time.time()
+    cutoff = now - _RATE_LIMIT_WINDOW
+    _request_counts[ip] = [t for t in _request_counts[ip] if t > cutoff]
+    if len(_request_counts[ip]) >= limit:
+        return False
+    _request_counts[ip].append(now)
+    return True
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Apply rate limiting to all API endpoints."""
+    ip = request.client.host if request.client else "unknown"
+    path = request.url.path
+
+    # Stricter limit for login endpoint
+    if path == "/api/auth/login":
+        now = time.time()
+        cutoff = now - _RATE_LIMIT_WINDOW
+        _login_counts[ip] = [t for t in _login_counts[ip] if t > cutoff]
+        if len(_login_counts[ip]) >= _RATE_LIMIT_LOGIN_MAX:
+            return Response(
+                content='{"detail":"Too many login attempts. Please try again later."}',
+                status_code=429,
+                media_type="application/json",
+            )
+        _login_counts[ip].append(now)
+
+    if not _check_rate_limit(ip):
+        return Response(
+            content='{"detail":"Rate limit exceeded. Please slow down."}',
+            status_code=429,
+            media_type="application/json",
+        )
+
+    response = await call_next(request)
+    return response
 
 app = FastAPI(title="AttendIQ API")
 
@@ -275,7 +334,7 @@ def invalidate_global_recognizer():
 
 # --- Request / Response Models ---
 class LoginRequest(BaseModel):
-    username: str
+    identifier: str  # matric number, email, or username
     password: str
 
 class UserCreateRequest(BaseModel):
@@ -283,8 +342,9 @@ class UserCreateRequest(BaseModel):
     password: str
     role: str
     full_name: str
-    student_id: Optional[str] = None
-    email: Optional[str] = None
+    title: Optional[str] = None  # Dr., Professor, etc. (for lecturers)
+    student_id: Optional[str] = None  # Matric number (required for students)
+    email: Optional[str] = None  # Required for students
     department: Optional[str] = None
     level: Optional[str] = None
 
@@ -314,15 +374,35 @@ class ConfigSaveRequest(BaseModel):
     stream_url: str
 
 class RecognizeFrameRequest(BaseModel):
-    frame: str  # base64 encoded JPEG
+    frame: str = Field(..., max_length=10_000_000, description="Base64 encoded JPEG frame")  # ~7.5MB max
+
+# --- Health & System Endpoints ---
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring and Docker HEALTHCHECK."""
+    db_ok = False
+    try:
+        db._conn.execute("SELECT 1")
+        db_ok = True
+    except Exception:
+        pass
+
+    status = "healthy" if db_ok else "degraded"
+    return {
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0",
+        "database": "ok" if db_ok else "error",
+    }
 
 # --- Endpoints ---
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest):
-    user = db.authenticate(req.username, req.password)
+    user = db.authenticate(req.identifier, req.password)
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     user.pop("password_hash", None)
     return user
 
@@ -338,6 +418,7 @@ def create_user(req: UserCreateRequest):
             password=req.password,
             role=req.role,
             full_name=req.full_name,
+            title=req.title,
             student_id=req.student_id,
             email=req.email,
             department=req.department,
@@ -497,12 +578,21 @@ def video_feed():
 def recognize_frame(req: RecognizeFrameRequest):
     """Accept a base64 JPEG frame from the browser, run face detection + recognition, return results."""
     try:
-        # Decode base64 JPEG
+        # Validate base64 size before decoding
+        raw_size = len(req.frame) * 3 / 4  # approximate decoded size
+        if raw_size > 7_500_000:  # 7.5MB limit
+            raise HTTPException(status_code=413, detail="Frame too large. Maximum 5MB compressed JPEG.")
+
         img_bytes = base64.b64decode(req.frame)
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if frame is None:
             raise HTTPException(status_code=400, detail="Invalid image data")
+
+        request_logger.debug("Frame received: %dx%d, %.1f KB",
+                             frame.shape[1], frame.shape[0], len(img_bytes) / 1024)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode frame: {e}")
 

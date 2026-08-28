@@ -16,7 +16,7 @@ export default function AdminUsers() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<Role | 'all'>('all')
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ username: '', password: '', role: 'student' as Role, full_name: '', student_id: '', email: '' })
+  const [form, setForm] = useState({ username: '', password: '', role: 'student' as Role, full_name: '', title: '', student_id: '', email: '' })
 
   const { data: users } = useQuery({ queryKey: ['users'], queryFn: () => getUsers() })
   const filtered = tab === 'all' ? users : users?.filter((u) => u.role === tab)
@@ -28,13 +28,14 @@ export default function AdminUsers() {
         password: form.password,
         role: form.role,
         full_name: form.full_name,
+        title: form.title || undefined,
         student_id: form.student_id || undefined,
         email: form.email || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
       setCreateOpen(false)
-      setForm({ username: '', password: '', role: 'student', full_name: '', student_id: '', email: '' })
+      setForm({ username: '', password: '', role: 'student', full_name: '', title: '', student_id: '', email: '' })
       showToast('success', 'User created')
     },
     onError: (err: Error) => showToast('error', err.message || 'Failed to create user'),
@@ -79,7 +80,7 @@ export default function AdminUsers() {
       <Table>
         <Thead>
           <th>Name</th>
-          <th>Username</th>
+          <th>Matric No. / Email</th>
           <th>Role</th>
           <th>Face enrolled</th>
           <th />
@@ -87,8 +88,12 @@ export default function AdminUsers() {
         <Tbody>
           {filtered?.map((u) => (
             <Tr key={u.id}>
-              <Td className="font-medium text-ink">{u.full_name}</Td>
-              <Td className="font-mono-label">{u.username}</Td>
+              <Td className="font-medium text-ink">
+                {u.title ? `${u.title} ` : ''}{u.full_name}
+              </Td>
+              <Td className="font-mono-label text-xs">
+                {u.role === 'student' ? (u.student_id || '—') : (u.email || u.username)}
+              </Td>
               <Td>
                 <Badge variant="neutral">{u.role}</Badge>
               </Td>
@@ -148,10 +153,31 @@ export default function AdminUsers() {
             <option value="lecturer">Lecturer</option>
             <option value="admin">Admin</option>
           </select>
-          {form.role === 'student' && (
-            <Input placeholder="Student ID (optional)" value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })} />
+          {form.role === 'lecturer' && (
+            <select
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+            >
+              <option value="">No title</option>
+              <option value="Dr.">Dr.</option>
+              <option value="Prof.">Prof.</option>
+              <option value="Assoc. Prof.">Assoc. Prof.</option>
+              <option value="Asst. Prof.">Asst. Prof.</option>
+              <option value="Mr.">Mr.</option>
+              <option value="Mrs.">Mrs.</option>
+              <option value="Ms.">Ms.</option>
+            </select>
           )}
-          <Input placeholder="Email (optional)" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          {form.role === 'student' && (
+            <>
+              <Input placeholder="Matric Number *" value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })} required />
+              <Input type="email" placeholder="Email *" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+            </>
+          )}
+          {form.role === 'lecturer' && (
+            <Input type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          )}
           <Button type="submit" className="w-full" loading={createMut.isPending}>
             Create user
           </Button>

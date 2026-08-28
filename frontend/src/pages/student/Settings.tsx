@@ -41,8 +41,7 @@ export default function StudentSettings() {
           </CardHeader>
           <CardContent className="space-y-3">
             <Row label="Name" value={user.full_name} />
-            <Row label="Username" value={user.username} />
-            {user.student_id && <Row label="Student ID" value={user.student_id} />}
+            {user.student_id && <Row label="Matric Number" value={user.student_id} />}
             {user.email && <Row label="Email" value={user.email} />}
             {user.department && <Row label="Department" value={user.department} />}
             {user.level && <Row label="Level" value={user.level} />}

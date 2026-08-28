@@ -104,10 +104,12 @@ export function AppShell() {
         <div className="shrink-0 border-t border-rule p-3">
           <div className="mb-2 flex items-center gap-2">
             <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-paper-3 font-mono-label text-ink-2">
-              {user.full_name?.[0] ?? user.username[0]}
+              {user.full_name?.[0] ?? '?'}
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-ink">{user.full_name || user.username}</p>
+              <p className="truncate text-sm font-medium text-ink">
+                {user.title ? `${user.title} ` : ''}{user.full_name}
+              </p>
               <p className="font-mono-label text-ink-3">{user.role}</p>
             </div>
           </div>

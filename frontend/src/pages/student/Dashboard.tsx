@@ -72,7 +72,7 @@ export default function StudentDashboard() {
             {greeting()}, {user?.full_name?.split(' ')[0]}
           </h1>
           <p className="text-xs text-ink-3 sm:text-sm">
-            {user?.student_id ? `ID: ${user.student_id}  ·  ` : ''}
+            {user?.student_id ? `Matric: ${user.student_id}  ·  ` : ''}
             {todayFormatted()}
           </p>
         </div>
