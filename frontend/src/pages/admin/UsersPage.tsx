@@ -275,7 +275,7 @@ export default function AdminUsers() {
         <Table>
           <Thead>
             <th>Name</th>
-            <th>Matric No. / Email</th>
+            <th>ID / Email</th>
             <th>Faculty</th>
             <th>Department</th>
             <th>Role</th>
@@ -289,7 +289,11 @@ export default function AdminUsers() {
                   {u.title ? `${u.title} ` : ''}{u.full_name}
                 </Td>
                 <Td className="font-mono-label text-xs">
-                  {u.role === 'student' ? (u.student_id || '—') : (u.email || u.username)}
+                  {u.role === 'student'
+                    ? (u.student_id || '—')
+                    : u.role === 'lecturer'
+                    ? `${u.username || '—'}${u.email ? ` / ${u.email}` : ''}`
+                    : u.username}
                 </Td>
                 <Td className="text-xs text-ink-2 max-w-[140px] truncate">
                   {u.faculty || '—'}
@@ -363,7 +367,14 @@ export default function AdminUsers() {
           className="space-y-3"
         >
           <Input placeholder="Full name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required />
-          <Input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+          {form.role !== 'student' && (
+            <Input
+              placeholder={form.role === 'lecturer' ? 'Staff ID' : 'Username'}
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              required
+            />
+          )}
           <Input
             type="password"
             placeholder="Password"
@@ -450,11 +461,13 @@ export default function AdminUsers() {
               value={editForm.full_name}
               onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
             />
-            <Input
-              placeholder="Username"
-              value={editForm.username}
-              onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
-            />
+            {editUser?.role !== 'student' && (
+              <Input
+                placeholder={editUser?.role === 'lecturer' ? 'Staff ID' : 'Username'}
+                value={editForm.username}
+                onChange={(e) => setEditForm({ ...editForm, username: e.target.value })}
+              />
+            )}
             {editUser?.role === 'lecturer' && (
               <select
                 value={editForm.title}

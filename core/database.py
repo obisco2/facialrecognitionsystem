@@ -308,6 +308,7 @@ class DatabaseManager:
                 raise ValueError("Matric number (Student ID) is required for students.")
             if not email or not email.strip():
                 raise ValueError("Email address is required for students.")
+            username = student_id.strip()
 
         # Check for duplicate username
         existing_username = self._conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
@@ -438,6 +439,9 @@ class DatabaseManager:
             return False
         
         user_before = self.get_user(user_id)
+        if user_before and user_before["role"] == "student" and "student_id" in updates:
+            updates["username"] = updates["student_id"]
+
         cols = ", ".join(f"{k} = ?" for k in updates)
         vals = list(updates.values()) + [user_id]
         with self._conn:
