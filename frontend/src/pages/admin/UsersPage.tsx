@@ -9,11 +9,13 @@ import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { getUsers, createUser, updateUser, resetPassword, deleteUser, type User, type Role } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/lib/auth'
 
 const TABS: (Role | 'all')[] = ['all', 'admin', 'lecturer', 'student']
 
 export default function AdminUsers() {
   const qc = useQueryClient()
+  const { user, setUser } = useAuth()
   const [tab, setTab] = useState<Role | 'all'>('all')
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({ username: '', password: '', role: 'student' as Role, full_name: '', title: '', student_id: '', email: '' })
@@ -67,6 +69,16 @@ export default function AdminUsers() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
+      if (editUser && user && editUser.id === user.id) {
+        setUser({
+          ...user,
+          full_name: editForm.full_name,
+          username: editForm.username,
+          title: editForm.title || null,
+          student_id: editForm.student_id || null,
+          email: editForm.email || null,
+        })
+      }
       setEditUser(null)
       showToast('success', 'User updated')
     },

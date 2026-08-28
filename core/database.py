@@ -205,6 +205,30 @@ class DatabaseManager:
             if not email or not email.strip():
                 raise ValueError("Email address is required for students.")
 
+        # Check for duplicate username
+        existing_username = self._conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        if existing_username:
+            raise ValueError(f"Username '{username}' is already taken.")
+
+        # Check for duplicate student_id / matric_number
+        if student_id:
+            student_id = student_id.strip()
+            # Check users table
+            existing_user_sid = self._conn.execute("SELECT id FROM users WHERE student_id = ?", (student_id,)).fetchone()
+            if existing_user_sid:
+                raise ValueError(f"Matric number (Student ID) '{student_id}' is already registered.")
+            # Check students table
+            existing_stud_sid = self._conn.execute("SELECT student_id FROM students WHERE matric_number = ?", (student_id,)).fetchone()
+            if existing_stud_sid:
+                raise ValueError(f"Matric number (Student ID) '{student_id}' is already registered.")
+
+        # Check for duplicate email
+        if email:
+            email = email.strip()
+            existing_email = self._conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+            if existing_email:
+                raise ValueError(f"Email '{email}' is already registered.")
+
         try:
             with self._conn:
                 cur = self._conn.execute(
@@ -228,8 +252,8 @@ class DatabaseManager:
                     )
             logger.info("Created user '%s' (role=%s)", username, role)
             return user_id
-        except sqlite3.IntegrityError:
-            raise ValueError(f"Username '{username}' is already taken.")
+        except sqlite3.IntegrityError as e:
+            raise ValueError(f"Registration failed: duplicate key or integrity error ({e})")
 
     def authenticate(self, identifier: str, password: str) -> dict | None:
         """
