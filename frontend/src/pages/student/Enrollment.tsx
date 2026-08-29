@@ -37,10 +37,10 @@ export default function StudentEnrollment() {
 
   // Liveness validation states
   const [livenessOpen, setLivenessOpen] = useState(false)
-  const [livenessStep, setLivenessStep] = useState<'idle' | 'eyes_open' | 'eyes_closed' | 'verifying' | 'success'>('idle')
-  const [fileOpen, setFileOpen] = useState<File | null>(null)
+  const [livenessStep, setLivenessStep] = useState<'idle' | 'ready' | 'scanning' | 'verifying' | 'success'>('idle')
   const [livenessError, setLivenessError] = useState<string | null>(null)
   const [livenessVerified, setLivenessVerified] = useState(false)
+  const [scanProgress, setScanProgress] = useState(0)
 
   if (!user) return null
 
@@ -274,17 +274,37 @@ export default function StudentEnrollment() {
     return new File([blob], `${name}.jpg`, { type: 'image/jpeg' })
   }
 
-  async function runLivenessApi(fOpen: File, fClosed: File) {
+  async function startLivenessScan() {
     setLivenessError(null)
+    setLivenessStep('scanning')
+    setScanProgress(0)
+
+    const files: File[] = []
+    
+    for (let i = 0; i < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      const f = snapFrameToFile(`live_frame_${i}`)
+      if (f) {
+        files.push(f)
+      }
+      setScanProgress(i + 1)
+    }
+
+    if (files.length < 3) {
+      setLivenessStep('ready')
+      setLivenessError('Liveness capture failed. Please make sure your camera is active and focused.')
+      return
+    }
+
     setLivenessStep('verifying')
     try {
-      await verifyLiveness(user!.id, fOpen, fClosed)
+      await verifyLiveness(user!.id, files)
       setLivenessStep('success')
       setLivenessVerified(true)
       showToast('success', 'Liveness verified successfully!')
     } catch (err) {
-      setLivenessStep('idle')
-      setLivenessError(err instanceof Error ? err.message : 'Liveness check failed. Please try again.')
+      setLivenessStep('ready')
+      setLivenessError(err instanceof Error ? err.message : 'Liveness scan failed. Please try again.')
     }
   }
 
@@ -511,9 +531,8 @@ export default function StudentEnrollment() {
               <Button
                 onClick={() => {
                   setLivenessOpen(true)
-                  setLivenessStep('eyes_open')
+                  setLivenessStep('ready')
                   setLivenessError(null)
-                  setFileOpen(null)
                 }}
                 className="ml-auto"
               >
@@ -534,52 +553,32 @@ export default function StudentEnrollment() {
             Please complete this quick anti-spoof check to verify you are a live user.
           </p>
 
-          {livenessStep === 'eyes_open' && (
+          {livenessStep === 'ready' && (
             <div className="space-y-3">
-              <div className="rounded bg-accent/10 p-3 text-accent border border-accent/20">
-                <strong>Challenge 1 of 2:</strong> Look straight at the camera with your <strong>eyes fully open</strong> and click Snap.
+              <div className="rounded bg-accent/10 p-3 text-accent border border-accent/20 text-xs">
+                Look straight at the camera and prepare to move your head slightly or blink when the scan starts.
               </div>
-              <Button
-                className="w-full"
-                onClick={() => {
-                  const file = snapFrameToFile('open')
-                  if (file) {
-                    setFileOpen(file)
-                    setLivenessStep('eyes_closed')
-                  } else {
-                    setLivenessError('Could not capture frame. Is the camera active?')
-                  }
-                }}
-              >
-                Snap Open Eyes
+              <Button className="w-full font-bold" onClick={startLivenessScan}>
+                Start Live Face Scan
               </Button>
             </div>
           )}
 
-          {livenessStep === 'eyes_closed' && (
-            <div className="space-y-3">
-              <div className="rounded bg-accent/10 p-3 text-accent border border-accent/20">
-                <strong>Challenge 2 of 2:</strong> Close your <strong>eyes completely</strong> and click Snap.
+          {livenessStep === 'scanning' && (
+            <div className="space-y-3 text-center py-4">
+              <div className="h-2 w-full bg-paper-3 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-accent transition-all duration-300" 
+                  style={{ width: `${(scanProgress / 3) * 100}%` }}
+                />
               </div>
-              <Button
-                className="w-full"
-                onClick={() => {
-                  const file = snapFrameToFile('closed')
-                  if (file) {
-                    runLivenessApi(fileOpen!, file)
-                  } else {
-                    setLivenessError('Could not capture frame.')
-                  }
-                }}
-              >
-                Snap Closed Eyes
-              </Button>
+              <p className="font-mono text-xs text-ink-3">Capturing live feed: {scanProgress} / 3 frames...</p>
             </div>
           )}
 
           {livenessStep === 'verifying' && (
             <div className="py-6 text-center text-ink-3">
-              Verifying eyes aspect ratio and face match…
+              Analyzing frame variation and verifying matching face…
             </div>
           )}
 
@@ -602,7 +601,7 @@ export default function StudentEnrollment() {
             </p>
           )}
 
-          {livenessStep !== 'success' && livenessStep !== 'verifying' && (
+          {livenessStep !== 'success' && livenessStep !== 'scanning' && livenessStep !== 'verifying' && (
             <div className="flex justify-end gap-2 border-t border-rule pt-3">
               <Button variant="outline" onClick={() => setLivenessOpen(false)}>
                 Cancel

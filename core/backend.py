@@ -805,52 +805,48 @@ def verify_blink(img_open, img_closed):
     return True, "Liveness verified"
 
 @app.post("/api/enrollment/liveness")
-async def verify_enrollment_liveness(user_id: int, file_open: UploadFile = File(...), file_closed: UploadFile = File(...)):
+async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = File(...)):
     try:
+        if len(files) < 2:
+            raise HTTPException(status_code=400, detail="Liveness check requires at least 2 sequential frames")
+
         import face_recognition as _fr
-        import math
-        content_open = await file_open.read()
-        content_closed = await file_closed.read()
-        
         import numpy as np
-        nparr_o = np.frombuffer(content_open, np.uint8)
-        img_o = cv2.imdecode(nparr_o, cv2.IMREAD_COLOR)
         
-        nparr_c = np.frombuffer(content_closed, np.uint8)
-        img_c = cv2.imdecode(nparr_c, cv2.IMREAD_COLOR)
-        
-        if img_o is None or img_c is None:
-            raise HTTPException(status_code=400, detail="Cannot decode image uploads")
+        decoded_imgs = []
+        for f in files:
+            content = await f.read()
+            nparr = np.frombuffer(content, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if img is None:
+                raise HTTPException(status_code=400, detail="Cannot decode image uploads")
+            decoded_imgs.append(img)
             
-        # Run blink checks on resized versions for speed
-        small_o = cv2.resize(img_o, (0, 0), fx=0.5, fy=0.5)
-        small_c = cv2.resize(img_c, (0, 0), fx=0.5, fy=0.5)
-        
-        success, msg = verify_blink(small_o, small_c)
-        encs_o = _fr.face_encodings(img_o)
-        
-        if not success:
-            # Fall back to frame variation motion liveness checks
-            encs_c = _fr.face_encodings(img_c)
-            if not encs_o or not encs_c:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Could not locate face landmarks. Please align your face in bright lighting and make sure camera is focused."
-                )
+        # Verify face exists in first and last frames
+        encs_first = _fr.face_encodings(decoded_imgs[0])
+        encs_last = _fr.face_encodings(decoded_imgs[-1])
+        if not encs_first or not encs_last:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not detect your face in the feed. Please center your face in bright lighting and try again."
+            )
             
-            # Check pixel difference to block static duplicate file uploads
-            diff = cv2.absdiff(small_o, small_c)
-            mean_diff = float(np.mean(diff))
-            if mean_diff < 0.25:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Liveness check failed: Please move slightly or blink between photos. Identical static pictures are not allowed."
-                )
-            msg = "Liveness verified (fallback motion detection)"
+        # Check pixel difference between first and last frame to block static spoof printouts
+        small_first = cv2.resize(decoded_imgs[0], (0, 0), fx=0.5, fy=0.5)
+        small_last = cv2.resize(decoded_imgs[-1], (0, 0), fx=0.5, fy=0.5)
+        diff = cv2.absdiff(small_first, small_last)
+        mean_diff = float(np.mean(diff))
+        
+        # Static printouts or screens held still yield < 0.2 difference
+        if mean_diff < 0.2:
+            raise HTTPException(
+                status_code=400,
+                detail="Liveness check failed: No movement detected. Please align your face and look directly at the camera while blinking or moving slightly."
+            )
             
-        if not encs_o:
-            raise HTTPException(status_code=400, detail="No face detected in live photo")
-        live_enc = encs_o[0]
+        # Verify the face matches the student's enrollment
+        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
+        live_enc = encs_first[0]
         
         match_count = 0
         total_checked = 0
@@ -863,20 +859,19 @@ async def verify_enrollment_liveness(user_id: int, file_open: UploadFile = File(
                     if t_encs:
                         total_checked += 1
                         dist = float(_fr.face_distance([live_enc], t_encs[0])[0])
-                        if dist <= 0.52:
+                        if dist < 0.6:
                             match_count += 1
                             
-        if total_checked > 0 and match_count < math.ceil(total_checked / 2):
+        if total_checked > 0 and match_count == 0:
             raise HTTPException(
-                status_code=400, 
-                detail="Live photo does not match your uploaded photos (impersonation check failed)"
+                status_code=400,
+                detail="Live face does not match the uploaded enrollment photos. Please verify your identity."
             )
             
         # Save verification marker
         filepath = os.path.join(temp_dir, "capture_5.jpg")
-        with open(filepath, "wb") as f:
-            f.write(content_open)
-            
+        cv2.imwrite(filepath, decoded_imgs[0])
+        
         return {"status": "ok", "message": "Liveness and matches verified successfully"}
     except HTTPException as e:
         raise e

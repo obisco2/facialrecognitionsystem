@@ -288,10 +288,9 @@ export const createDepartment = (facultyId: number, name: string) =>
 export const deleteDepartment = (id: number) => del<{ status: string }>(`/departments/${id}`)
 
 // --- Liveness verification ---
-export const verifyLiveness = (userId: number, fileOpen: File, fileClosed: File) => {
+export const verifyLiveness = (userId: number, files: File[]) => {
   const form = new FormData()
-  form.append('file_open', fileOpen)
-  form.append('file_closed', fileClosed)
+  files.forEach((f) => form.append('files', f))
   return request<{ status: string; message: string }>(`/enrollment/liveness?user_id=${userId}`, {
     method: 'POST',
     body: form,
