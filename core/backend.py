@@ -643,8 +643,8 @@ def recognize_frame(req: RecognizeFrameRequest):
         if face_img.size > 0:
             gray_face = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
             liveness_score = float(cv2.Laplacian(gray_face, cv2.CV_64F).var())
-            # A genuine live webcam face is typically between 40.0 and 8000.0
-            if liveness_score < 40.0 or liveness_score > 9000.0:
+            # Lowered bounds to support low quality/blurry webcams
+            if liveness_score < 10.0 or liveness_score > 12000.0:
                 is_live = False
 
         is_known = (name != "Unknown") and is_live
