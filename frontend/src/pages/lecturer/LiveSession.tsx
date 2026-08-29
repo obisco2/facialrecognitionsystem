@@ -27,6 +27,7 @@ export default function LiveSession() {
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [cameraActive, setCameraActive] = useState(false)
   const [faces, setFaces] = useState<RecognizeResult[]>([])
+  const [videoDims, setVideoDims] = useState({ width: 640, height: 480 })
 
   const [startTime, setStartTime] = useState<number | null>(null)
   const [sessionTime, setSessionTime] = useState('')
@@ -143,6 +144,12 @@ export default function LiveSession() {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    if (video.videoWidth && video.videoHeight) {
+      if (videoDims.width !== video.videoWidth || videoDims.height !== video.videoHeight) {
+        setVideoDims({ width: video.videoWidth, height: video.videoHeight })
+      }
+    }
+
     ctx.drawImage(video, 0, 0)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
     const base64 = dataUrl.split(',')[1]
@@ -153,7 +160,7 @@ export default function LiveSession() {
     } catch {
       // Recognition failure is non-fatal — skip this frame
     }
-  }, [cameraActive])
+  }, [cameraActive, videoDims])
 
   // Run recognition loop (only if backend camera is inactive/missing)
   useEffect(() => {
@@ -283,10 +290,10 @@ export default function LiveSession() {
                       key={i}
                       className={`absolute border-2 ${face.is_known ? 'border-green-400' : 'border-red-400'}`}
                       style={{
-                        top: `${(top / 480) * 100}%`,
-                        left: `${(left / 640) * 100}%`,
-                        width: `${((right - left) / 640) * 100}%`,
-                        height: `${((bottom - top) / 480) * 100}%`,
+                        top: `${(top / videoDims.height) * 100}%`,
+                        left: `${(left / videoDims.width) * 100}%`,
+                        width: `${((right - left) / videoDims.width) * 100}%`,
+                        height: `${((bottom - top) / videoDims.height) * 100}%`,
                       }}
                     >
                       <div
