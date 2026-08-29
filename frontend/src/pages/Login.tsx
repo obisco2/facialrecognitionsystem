@@ -45,7 +45,7 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div>
               <label htmlFor="identifier" className="mb-1.5 block text-sm font-medium text-ink-2">
-                Matric No. / Email
+                Staff ID / Matric No. / Email
               </label>
               <Input
                 id="identifier"

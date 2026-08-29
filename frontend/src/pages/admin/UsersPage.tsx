@@ -409,7 +409,15 @@ export default function AdminUsers() {
           )}
           {form.role === 'student' && (
             <>
-              <Input placeholder="Matric Number *" value={form.student_id} onChange={(e) => setForm({ ...form, student_id: e.target.value })} required />
+              <Input
+                type="text"
+                pattern="[0-9]*"
+                inputMode="numeric"
+                placeholder="Matric Number *"
+                value={form.student_id}
+                onChange={(e) => setForm({ ...form, student_id: e.target.value.replace(/[^0-9]/g, '') })}
+                required
+              />
               <Input type="email" placeholder="Email *" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
             </>
           )}
@@ -494,9 +502,12 @@ export default function AdminUsers() {
             )}
             {editUser?.role === 'student' && (
               <Input
+                type="text"
+                pattern="[0-9]*"
+                inputMode="numeric"
                 placeholder="Matric Number"
                 value={editForm.student_id}
-                onChange={(e) => setEditForm({ ...editForm, student_id: e.target.value })}
+                onChange={(e) => setEditForm({ ...editForm, student_id: e.target.value.replace(/[^0-9]/g, '') })}
               />
             )}
             {editUser?.role !== 'admin' && (

@@ -256,7 +256,7 @@ The evaluation module produces per-group accuracy metrics. The disparity report 
 
 ### 9.4 Limitations
 
-The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. Liveness detection is not implemented, so photos or videos could spoof the system.
+The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. While active liveness detection (3-frame live scan motion delta analysis) is implemented to block static screenshots and paper photos, extremely sophisticated spoofing attacks (like 3D masks or advanced deepfakes) are still open security risks.
 
 ## 10. Deployment Architecture
 
@@ -279,6 +279,15 @@ Behind a shared-host reverse proxy (e.g., Proxmox/LXC), direct inbound ports 80/
 Rapid sequential calls to `/api/recognize/frame` could trigger segmentation faults (SEGV) in the uvicorn process due to race conditions from reloading dlib weights and the face database on every request.
 
 **Solution**: The backend uses a globally cached `Recognizer` singleton that lazy-loads once on startup and invalidates only when a student enrolls or a retrain is triggered. This eliminates concurrent disk I/O, reduces per-request latency, and prevents crash-to-restart loops.
+
+### 10.4 Active Liveness Verification & QoL Enhancements
+
+To make the system robust for real-world deployment (like UNILAG's computer engineering classrooms), several advanced features were implemented:
+1. **Automated 3-Frame Live Scan**: Student enrollment features an active anti-spoof check. The system snaps 3 frames sequentially, evaluating the motion delta (Laplacian difference) across the images. It verifies that natural human motion exists, blocking static screenshots or paper photos. A fallback mode is active to prevent false negatives on blurry or low-resolution cameras.
+2. **Staff ID & Name Mapping**: Lecturers log in and manage accounts using their **Staff ID** (removing generic usernames). Students register under their **Full Name** and unique numeric **Matric Number** (which automatically synchronizes to their username field).
+3. **Faculties & Departments Management**: Admins can seed and manage standard UNILAG faculties and departments. Classes and courses are assignable to these departments, linking students and lecturers to their respective academic fields.
+4. **Form Field Constraints**: Input forms enforce strict validation rules. Matric Numbers and Staff IDs are filtered dynamically to reject non-numeric characters, and emails enforce proper format patterns.
+5. **Toast Notifications**: Built custom responsive toast components that render clean notification cards for errors and success messages, replacing generic native browser alert dialogs.
 
 ---
 

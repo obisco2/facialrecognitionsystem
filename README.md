@@ -95,17 +95,19 @@ python main.py
 - Dashboard with enrollment stats, attendance counts, and inline bias evaluation
 - Manage users (create, edit, delete across all roles)
 - Manage classes (create, delete, enroll/unenroll students)
+- Manage faculties and departments (create, delete, view rosters)
 - Run bias evaluation and view accuracy charts
 
 ### Lecturer
 - Dashboard with class overview
-- Manage own classes and enrollment
-- Start/stop live attendance sessions with real-time recognition
+- Log in using **Staff ID**
+- Manage own classes, departments, and enrollment
+- Start/stop live attendance sessions with real-time recognition (using full frame dlib landmark contexts)
 - Log manual attendance for students not recognized by camera
 
 ### Student
 - Dashboard with attendance history and per-class breakdown
-- Face enrollment (capture via camera or upload files, validate, confirm)
+- Face enrollment (capture via WebRTC camera featuring **3-frame automated live liveness scan** or upload files, validate, confirm)
 - Settings (account info, retrain face model)
 
 ---
