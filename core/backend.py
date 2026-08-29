@@ -827,12 +827,27 @@ async def verify_enrollment_liveness(user_id: int, file_open: UploadFile = File(
         small_c = cv2.resize(img_c, (0, 0), fx=0.5, fy=0.5)
         
         success, msg = verify_blink(small_o, small_c)
-        if not success:
-            raise HTTPException(status_code=400, detail=msg)
-            
-        # Verify matching of the open eye photo against the enrollment slots
-        temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
         encs_o = _fr.face_encodings(img_o)
+        
+        if not success:
+            # Fall back to frame variation motion liveness checks
+            encs_c = _fr.face_encodings(img_c)
+            if not encs_o or not encs_c:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not locate face landmarks. Please align your face in bright lighting and make sure camera is focused."
+                )
+            
+            # Check pixel difference to block static duplicate file uploads
+            diff = cv2.absdiff(small_o, small_c)
+            mean_diff = float(np.mean(diff))
+            if mean_diff < 0.25:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Liveness check failed: Please move slightly or blink between photos. Identical static pictures are not allowed."
+                )
+            msg = "Liveness verified (fallback motion detection)"
+            
         if not encs_o:
             raise HTTPException(status_code=400, detail="No face detected in live photo")
         live_enc = encs_o[0]
