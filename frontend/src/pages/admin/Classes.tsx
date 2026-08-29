@@ -13,6 +13,7 @@ import {
   getClassEnrollments,
   enrollStudent,
   unenrollStudent,
+  getDepartments,
 } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
 
@@ -20,10 +21,11 @@ export default function AdminClasses() {
   const qc = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [manageId, setManageId] = useState<number | null>(null)
-  const [form, setForm] = useState({ name: '', code: '', schedule: '', room: '', lecturerId: '' })
+  const [form, setForm] = useState({ name: '', code: '', schedule: '', room: '', lecturerId: '', department: '' })
 
   const { data: classes } = useQuery({ queryKey: ['classes'], queryFn: () => getClasses() })
   const { data: lecturers } = useQuery({ queryKey: ['users', 'lecturer'], queryFn: () => getUsers('lecturer') })
+  const { data: departments } = useQuery({ queryKey: ['departments'], queryFn: () => getDepartments() })
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -32,11 +34,12 @@ export default function AdminClasses() {
         code: form.code,
         schedule: form.schedule || undefined,
         room: form.room || undefined,
+        department: form.department || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['classes'] })
       setCreateOpen(false)
-      setForm({ name: '', code: '', schedule: '', room: '', lecturerId: '' })
+      setForm({ name: '', code: '', schedule: '', room: '', lecturerId: '', department: '' })
       showToast('success', 'Class created')
     },
     onError: (err: Error) => showToast('error', err.message || 'Failed to create class'),
@@ -67,6 +70,7 @@ export default function AdminClasses() {
         <Thead>
           <th>Name</th>
           <th>Code</th>
+          <th>Department</th>
           <th>Lecturer</th>
           <th>Room</th>
           <th />
@@ -76,6 +80,7 @@ export default function AdminClasses() {
             <Tr key={c.id}>
               <Td className="font-medium text-ink">{c.name}</Td>
               <Td className="font-mono-label">{c.code}</Td>
+              <Td className="text-xs text-ink-2 max-w-[140px] truncate">{c.department || '—'}</Td>
               <Td>{lecturers?.find((l) => l.id === c.lecturer_id)?.full_name ?? '—'}</Td>
               <Td>{c.room ?? '—'}</Td>
               <Td>
@@ -96,7 +101,7 @@ export default function AdminClasses() {
           ))}
           {classes?.length === 0 && (
             <Tr>
-              <Td colSpan={5} className="py-8 text-center text-ink-3">
+              <Td colSpan={6} className="py-8 text-center text-ink-3">
                 No classes yet.
               </Td>
             </Tr>
@@ -129,6 +134,18 @@ export default function AdminClasses() {
           </select>
           <Input placeholder="Schedule (optional)" value={form.schedule} onChange={(e) => setForm({ ...form, schedule: e.target.value })} />
           <Input placeholder="Room (optional)" value={form.room} onChange={(e) => setForm({ ...form, room: e.target.value })} />
+          <select
+            value={form.department}
+            onChange={(e) => setForm({ ...form, department: e.target.value })}
+            className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+          >
+            <option value="">Select Department (optional)…</option>
+            {departments?.map((d) => (
+              <option key={d.id} value={d.name}>
+                {d.name}
+              </option>
+            ))}
+          </select>
           <Button type="submit" className="w-full" loading={createMut.isPending}>
             Create class
           </Button>

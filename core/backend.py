@@ -368,6 +368,7 @@ class ClassCreateRequest(BaseModel):
     code: str
     schedule: Optional[str] = None
     room: Optional[str] = None
+    department: Optional[str] = None
 
 class FacultyCreateRequest(BaseModel):
     name: str
@@ -482,7 +483,8 @@ def create_class(req: ClassCreateRequest, lecturer_id: int):
         code=req.code,
         lecturer_id=lecturer_id,
         schedule=req.schedule,
-        room=req.room
+        room=req.room,
+        department=req.department
     )
     return {"id": class_id}
 

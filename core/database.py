@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS classes (
     lecturer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     schedule    TEXT,
     room        TEXT,
+    department  TEXT,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -172,6 +173,7 @@ class DatabaseManager:
                 ("users", "faculty", "TEXT"),
                 ("users", "department", "TEXT"),
                 ("students", "faculty", "VARCHAR(100)"),
+                ("classes", "department", "TEXT"),
             ]:
                 try:
                     self._conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
@@ -507,12 +509,12 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
 
     def create_class(self, name: str, code: str, lecturer_id: int,
-                     schedule: str = None, room: str = None) -> int:
+                     schedule: str = None, room: str = None, department: str = None) -> int:
         with self._conn:
             cur = self._conn.execute(
-                """INSERT INTO classes (name, code, lecturer_id, schedule, room)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (name, code, lecturer_id, schedule, room),
+                """INSERT INTO classes (name, code, lecturer_id, schedule, room, department)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (name, code, lecturer_id, schedule, room, department),
             )
         logger.info("Created class '%s' (%s) for lecturer id=%d", name, code, lecturer_id)
         return cur.lastrowid
@@ -550,7 +552,7 @@ class DatabaseManager:
         return self._rows_to_list(rows)
 
     def update_class(self, class_id: int, **fields) -> bool:
-        allowed = {"name", "code", "lecturer_id", "schedule", "room"}
+        allowed = {"name", "code", "lecturer_id", "schedule", "room", "department"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False

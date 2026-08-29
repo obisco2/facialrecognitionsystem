@@ -75,6 +75,7 @@ export interface SchoolClass {
   lecturer_id: number
   schedule?: string | null
   room?: string | null
+  department?: string | null
 }
 
 export interface AttendanceRecord {
@@ -136,7 +137,7 @@ export const getClasses = (lecturerId?: number) =>
   get<SchoolClass[]>(`/classes${lecturerId ? `?lecturer_id=${lecturerId}` : ''}`)
 export const createClass = (
   lecturerId: number,
-  data: { name: string; code: string; schedule?: string; room?: string },
+  data: { name: string; code: string; schedule?: string; room?: string; department?: string },
 ) => post<{ id: number }>(`/classes?lecturer_id=${lecturerId}`, data)
 export const updateClass = (id: number, data: Partial<SchoolClass>) => put<{ status: string }>(`/classes/${id}`, data)
 export const deleteClass = (id: number) => del<{ status: string }>(`/classes/${id}`)
