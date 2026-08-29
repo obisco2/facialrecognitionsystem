@@ -52,7 +52,7 @@ export default function Login() {
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 icon={<Mail />}
-                placeholder="Enter matric number or email"
+                placeholder="Staff ID, Matric Number, or Email"
                 autoComplete="username"
                 required
               />
