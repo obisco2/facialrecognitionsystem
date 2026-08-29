@@ -116,6 +116,18 @@ class FaceEncoder:
             return self._encode_dlib(image)
         return self._encode_lbph(image)
 
+    def compute_encoding_full(self, full_image: np.ndarray, box: tuple[int, int, int, int]) -> Optional[np.ndarray]:
+        """Compute face encoding using full image context to ensure landmark accuracy."""
+        if full_image is None or full_image.size == 0:
+            return None
+        if self._engine == "dlib":
+            rgb = cv2.cvtColor(full_image, cv2.COLOR_BGR2RGB)
+            encodings = _fr.face_encodings(rgb, known_face_locations=[box])
+            return np.array(encodings[0]) if encodings else None
+        top, right, bottom, left = box
+        crop = full_image[top:bottom, left:right]
+        return self._encode_lbph(crop)
+
     def identify(self, face_encoding: np.ndarray) -> tuple[str, Optional[float]]:
         """
         Match a face encoding against the loaded known-faces database.

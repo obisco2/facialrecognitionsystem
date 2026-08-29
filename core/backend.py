@@ -921,7 +921,7 @@ def validate_enrollment(user_id: int):
             x1, x2 = max(0, int(l*2)), min(w, int(r*2))
             face_img = img[y1:y2, x1:x2]
             if face_img.size > 0 and face_img.shape[0] > 10 and face_img.shape[1] > 10:
-                enc = encoder.compute_encoding(face_img)
+                enc = encoder.compute_encoding_full(img, (y1, x2, y2, x1))
                 if enc is not None:
                     face_encodings.append((i, enc))
         except Exception:

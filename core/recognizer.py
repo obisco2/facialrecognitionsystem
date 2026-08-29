@@ -99,13 +99,7 @@ class Recognizer:
             bottom_o = max(0, min(bottom_o, h))
             left_o = max(0, min(left_o, w))
 
-            face_img = frame[top_o:bottom_o, left_o:right_o]
-            if face_img.size == 0:
-                names.append("Unknown")
-                distances.append(None)
-                continue
-
-            encoding = self.encoder.compute_encoding(face_img)
+            encoding = self.encoder.compute_encoding_full(frame, (top_o, right_o, bottom_o, left_o))
             if encoding is not None:
                 name, dist = self.encoder.identify(encoding)
                 names.append(name)
