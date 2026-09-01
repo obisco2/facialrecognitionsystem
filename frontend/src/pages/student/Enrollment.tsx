@@ -98,12 +98,22 @@ export default function StudentEnrollment() {
     if (!videoRef.current || !canvasRef.current || !cameraActive) return null
     const video = videoRef.current
     const canvas = canvasRef.current
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    
+    const MAX_DIM = 800
+    let w = video.videoWidth
+    let h = video.videoHeight
+    if (w > MAX_DIM || h > MAX_DIM) {
+      const ratio = Math.min(MAX_DIM / w, MAX_DIM / h)
+      w = Math.round(w * ratio)
+      h = Math.round(h * ratio)
+    }
+    
+    canvas.width = w
+    canvas.height = h
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
-    ctx.drawImage(video, 0, 0)
-    return canvas.toDataURL('image/jpeg', 0.95).split(',')[1]
+    ctx.drawImage(video, 0, 0, w, h)
+    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1]
   }, [cameraActive])
 
   // Cleanup on unmount
@@ -180,7 +190,9 @@ export default function StudentEnrollment() {
     try {
       await startEnrollment(user!.id, user!.full_name)
       const fileArray = Array.from(files).slice(0, 5)
-      await uploadEnrollment(user!.id, fileArray)
+      for (let i = 0; i < fileArray.length; i++) {
+        await uploadEnrollment(user!.id, [fileArray[i]], i)
+      }
 
       // Build previews from the uploaded files
       const filled: Record<number, boolean> = {}

@@ -882,8 +882,9 @@ async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = Fil
 def validate_enrollment(user_id: int):
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
     
-    detector = FaceDetector(model="haar")
-    encoder = FaceEncoder(engine=config.recognition_engine)
+    rec = get_recognizer()
+    detector = rec.detector
+    encoder = rec.encoder
 
     results = []
     valid_count = 0
