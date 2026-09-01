@@ -256,7 +256,7 @@ The evaluation module produces per-group accuracy metrics. The disparity report 
 
 ### 9.4 Limitations
 
-The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. While active liveness detection (3-frame live scan motion delta analysis) is implemented to block static screenshots and paper photos, extremely sophisticated spoofing attacks (like 3D masks or advanced deepfakes) are still open security risks.
+The system is not 100% accurate. Performance varies across demographics. It cannot serve as a sole authentication method. While active liveness detection (3-frame 3D landmark variation tracking) is implemented to block static screenshots and paper photos, extremely sophisticated spoofing attacks (like 3D masks or advanced deepfakes) are still open security risks.
 
 ## 10. Deployment Architecture
 
@@ -283,7 +283,7 @@ Rapid sequential calls to `/api/recognize/frame` could trigger segmentation faul
 ### 10.4 Active Liveness Verification & QoL Enhancements
 
 To make the system robust for real-world deployment (like UNILAG's computer engineering classrooms), several advanced features were implemented:
-1. **Automated 3-Frame Live Scan**: Student enrollment features an active anti-spoof check. The system snaps 3 frames sequentially, evaluating the motion delta (Laplacian difference) across the images. It verifies that natural human motion exists, blocking static screenshots or paper photos. A fallback mode is active to prevent false negatives on blurry or low-resolution cameras.
+1. **Automated 3-Frame Live Scan**: Student enrollment features a robust active anti-spoof check. The system snaps 3 frames sequentially and evaluates the 3D structural variation of facial landmarks (using dlib's 68-point model). By tracking changes in the Eye Aspect Ratio (EAR) and Nose-to-Eye yaw ratio across frames, the system mathematically ensures 3D human movement, blocking 2D static screenshots, IPads, or paper photos (since a 2D surface yields zero variation in relative proportions when moved).
 2. **Staff ID & Name Mapping**: Lecturers log in and manage accounts using their **Staff ID** (removing generic usernames). Students register under their **Full Name** and unique numeric **Matric Number** (which automatically synchronizes to their username field).
 3. **Faculties & Departments Management**: Admins can seed and manage standard UNILAG faculties and departments. Classes and courses are assignable to these departments, linking students and lecturers to their respective academic fields.
 4. **Form Field Constraints**: Input forms enforce strict validation rules. Matric Numbers and Staff IDs are filtered dynamically to reject non-numeric characters, and emails enforce proper format patterns.
@@ -319,7 +319,7 @@ To make the system robust for real-world deployment (like UNILAG's computer engi
 
 | Area | Limitation | Impact |
 |------|-----------|--------|
-| **Liveness Detection** | No anti-spoofing — photos or video replays can fool the system | Security risk in uncontrolled environments |
+| **Deepfake/Mask Spoofing** | 3D landmark tracking prevents 2D photo attacks, but may not stop sophisticated 3D masks or advanced deepfake video replays | Requires multi-modal sensor (IR/Depth) for true enterprise security |
 | **Lighting Sensitivity** | Haar Cascade accuracy degrades under harsh shadows or backlighting | Reduced detection rate in poorly lit rooms |
 | **Single Camera** | Only one camera stream active at a time | Cannot cover multiple entrance points simultaneously |
 | **Database** | SQLite is single-writer; no concurrent write scaling | Unsuitable for multi-server horizontal deployment |
@@ -328,7 +328,7 @@ To make the system robust for real-world deployment (like UNILAG's computer engi
 
 ### 12.2 Future Improvements
 
-1. **Anti-Spoofing**: Implement liveness detection using blink analysis, texture analysis (LBP), or 3D depth estimation to prevent photo/video replay attacks.
+1. **Anti-Spoofing Sensors**: Upgrade from software-based 3D landmark tracking to hardware-based IR/Depth sensors for enterprise-grade security against deepfakes.
 2. **JWT Authentication**: Add stateless token-based auth with refresh tokens and role-based middleware on the API layer.
 3. **PostgreSQL Migration**: Replace SQLite with PostgreSQL for concurrent write support and production-grade reliability.
 4. **CNN-Based Detection**: Upgrade from Haar Cascade to MTCNN or RetinaFace for higher detection accuracy across demographics.
