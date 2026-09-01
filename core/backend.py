@@ -822,26 +822,58 @@ async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = Fil
                 raise HTTPException(status_code=400, detail="Cannot decode image uploads")
             decoded_imgs.append(img)
             
-        # Verify face exists in first and last frames
-        encs_first = _fr.face_encodings(decoded_imgs[0])
-        encs_last = _fr.face_encodings(decoded_imgs[-1])
-        if not encs_first or not encs_last:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect your face in the feed. Please center your face in bright lighting and try again."
-            )
+        # Verify face exists in all frames and extract landmarks
+        landmarks_list = []
+        for img in decoded_imgs:
+            marks = _fr.face_landmarks(img)
+            if not marks:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not locate facial features in one or more frames. Please ensure your face is well-lit and visible."
+                )
+            landmarks_list.append(marks[0])
             
-        # Check pixel difference between first and last frame to block static spoof printouts
-        small_first = cv2.resize(decoded_imgs[0], (0, 0), fx=0.5, fy=0.5)
-        small_last = cv2.resize(decoded_imgs[-1], (0, 0), fx=0.5, fy=0.5)
-        diff = cv2.absdiff(small_first, small_last)
-        mean_diff = float(np.mean(diff))
+        encs_first = _fr.face_encodings(decoded_imgs[0])
+        if not encs_first:
+             raise HTTPException(status_code=400, detail="Could not extract face encoding.")
+             
+        # LIVENESS CHECK: 3D Landmark Variation (Dlib)
+        # We calculate the Eye Aspect Ratio (EAR) and Nose-to-Eye distances for all frames.
+        # A static printed photo (even if shaken) will have zero variation in these 2D relative ratios.
+        import math
+        def get_ear(eye):
+            if len(eye) < 6: return 0.0
+            a = math.dist(eye[1], eye[5])
+            b = math.dist(eye[2], eye[4])
+            c = math.dist(eye[0], eye[3])
+            return (a + b) / (2.0 * c) if c != 0 else 0.0
+            
+        ears = []
+        nose_ratios = []
+        for lm in landmarks_list:
+            if "left_eye" in lm and "right_eye" in lm and "nose_bridge" in lm and "nose_tip" in lm:
+                ear = (get_ear(lm["left_eye"]) + get_ear(lm["right_eye"])) / 2.0
+                ears.append(ear)
+                # Distance from nose tip to left eye vs right eye (yaw indicator)
+                nose_tip = lm["nose_tip"][2]
+                left_eye_center = lm["left_eye"][0]
+                right_eye_center = lm["right_eye"][3]
+                dist_l = math.dist(nose_tip, left_eye_center)
+                dist_r = math.dist(nose_tip, right_eye_center)
+                nose_ratios.append(dist_l / dist_r if dist_r != 0 else 1.0)
+                
+        if len(ears) < 2:
+            raise HTTPException(status_code=400, detail="Facial details incomplete for liveness check.")
+            
+        ear_variation = max(ears) - min(ears)
+        nose_variation = max(nose_ratios) - min(nose_ratios)
         
-        # Static printouts or screens held still yield < 0.2 difference
-        if mean_diff < 0.2:
+        # If the face is a printed photo, the variations will be near 0.0
+        # We require either a slight blink (EAR variation) or a slight head turn (Nose ratio variation)
+        if ear_variation < 0.015 and nose_variation < 0.015:
             raise HTTPException(
                 status_code=400,
-                detail="Liveness check failed: No movement detected. Please align your face and look directly at the camera while blinking or moving slightly."
+                detail="Liveness check failed (Static face). Please blink or turn your head slightly during the scan."
             )
             
         # Verify the face matches the student's enrollment
