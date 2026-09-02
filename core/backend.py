@@ -894,8 +894,8 @@ async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = Fil
                         if dist < 0.50:  # Stricter tolerance for enrollment
                             match_count += 1
                             
-        # Require at least 40% match rate with uploaded photos
-        required_matches = math.ceil(total_checked * 0.40)
+        # Require at least 80% match rate with uploaded photos (4 out of 5)
+        required_matches = math.ceil(total_checked * 0.80)
         if total_checked > 0 and match_count < required_matches:
             raise HTTPException(
                 status_code=400,
