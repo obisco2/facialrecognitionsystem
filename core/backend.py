@@ -891,13 +891,15 @@ async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = Fil
                     if t_encs:
                         total_checked += 1
                         dist = float(_fr.face_distance([live_enc], t_encs[0])[0])
-                        if dist < 0.6:
+                        if dist < 0.50:  # Stricter tolerance for enrollment
                             match_count += 1
                             
-        if total_checked > 0 and match_count == 0:
+        # Require at least 40% match rate with uploaded photos
+        required_matches = math.ceil(total_checked * 0.40)
+        if total_checked > 0 and match_count < required_matches:
             raise HTTPException(
                 status_code=400,
-                detail="Live face does not match the uploaded enrollment photos. Please verify your identity."
+                detail=f"Live face does not match the uploaded enrollment photos ({match_count}/{total_checked} matched, required {required_matches}). Please verify your identity."
             )
             
         # Save verification marker
@@ -977,7 +979,7 @@ def validate_enrollment(user_id: int):
                     if encoder.is_dlib:
                         import face_recognition as _fr
                         dist = float(_fr.face_distance([first_enc], enc)[0])
-                        if dist > 0.6:
+                        if dist > 0.50:  # Stricter tolerance
                             results[first_idx]["state"] = "invalid"
                             results[first_idx]["message"] = "Photos show different people"
                             results[slot_idx]["state"] = "invalid"
