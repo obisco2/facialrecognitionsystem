@@ -1,13 +1,14 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { CheckCircle2, ScanFace, AlertTriangle, BookOpen } from 'lucide-react'
+import { CheckCircle2, ScanFace, AlertTriangle, BookOpen, Plus, X } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { getStudentAttendance, getStudentSummary } from '@/lib/api'
+import { getStudentAttendance, getStudentSummary, getClasses, enrollStudent, unenrollStudent } from '@/lib/api'
 import type { AttendanceRecord } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { showToast } from '@/components/ui/toast'
 
 function greeting() {
   const h = new Date().getHours()
@@ -33,6 +34,7 @@ function classStatus(percent: number) {
 
 export default function StudentDashboard() {
   const { user } = useAuth()
+  const qc = useQueryClient()
 
   const { data: records } = useQuery({
     queryKey: ['student-attendance', user?.full_name],
@@ -44,6 +46,31 @@ export default function StudentDashboard() {
     queryKey: ['student-summary', user?.id],
     queryFn: () => getStudentSummary(user!.id),
     enabled: !!user,
+  })
+
+  // Fetch all classes for registration
+  const { data: allClasses } = useQuery({
+    queryKey: ['classes'],
+    queryFn: () => getClasses(),
+    enabled: !!user,
+  })
+
+  const enrollMut = useMutation({
+    mutationFn: (classId: number) => enrollStudent(classId, user!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
+      showToast('success', 'Successfully registered for class')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to register'),
+  })
+
+  const unenrollMut = useMutation({
+    mutationFn: (classId: number) => unenrollStudent(classId, user!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
+      showToast('success', 'Unregistered from class')
+    },
+    onError: (err: Error) => showToast('error', err.message || 'Failed to unregister'),
   })
 
   const distinctClasses = useMemo(() => {
@@ -207,6 +234,53 @@ export default function StudentDashboard() {
           </CardContent>
         </Card>
       )}
+
+      {/* Course Registration */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>Course Registration</CardTitle>
+          <p className="text-sm text-ink-3">Select the courses you are offering this semester.</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!allClasses ? (
+            <p className="text-sm text-ink-3">Loading classes...</p>
+          ) : allClasses.length === 0 ? (
+            <p className="text-sm text-ink-3">No classes available.</p>
+          ) : (
+            allClasses.map((cls) => {
+              const isEnrolled = summary?.some((s) => s.class_id === cls.id)
+              return (
+                <div key={cls.id} className="flex items-center justify-between gap-4 p-3 rounded-md bg-paper-2 border border-paper-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-mono-label text-accent">{cls.code}</span>
+                      <span className="truncate text-sm font-medium text-ink">{cls.name}</span>
+                    </div>
+                    {cls.department && <p className="text-xs text-ink-3">Dept: {cls.department}</p>}
+                  </div>
+                  {isEnrolled ? (
+                    <button
+                      onClick={() => unenrollMut.mutate(cls.id)}
+                      disabled={unenrollMut.isPending}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-danger bg-danger-tint rounded-md hover:opacity-80 transition-opacity disabled:opacity-50"
+                    >
+                      <X className="size-3.5" /> Remove
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => enrollMut.mutate(cls.id)}
+                      disabled={enrollMut.isPending}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-accent bg-accent-tint rounded-md hover:opacity-80 transition-opacity disabled:opacity-50"
+                    >
+                      <Plus className="size-3.5" /> Add Course
+                    </button>
+                  )}
+                </div>
+              )
+            })
+          )}
+        </CardContent>
+      </Card>
 
       {/* Attendance history */}
       <Card>

@@ -662,28 +662,33 @@ def recognize_frame(req: RecognizeFrameRequest):
             },
         })
 
-        # Log attendance in database if session is running (useful for VPS deployment)
+        # Log attendance in database if session is running
         if is_known and streamer.running and streamer.active_mode == "attendance":
             if name not in streamer.marked_ids:
                 student = db.get_user_by_name(name)
+                # Ensure student exists, hasn't been marked yet, and IS ENROLLED in this class
                 if student and student["id"] not in streamer.marked_ids:
-                    logged = db.log_attendance(
-                        student["id"],
-                        streamer.session_class_id,
-                        session_date=streamer.session_date,
-                        method="face",
-                        confidence=dist,
-                        marked_by=streamer.lecturer_id
-                    )
-                    streamer.marked_ids.add(student["id"])
-                    streamer.marked_ids.add(name)
-                    if logged:
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        streamer.marked_names.append({
-                            "time": ts,
-                            "name": name,
-                            "conf": f"{dist:.2f}" if dist else "—"
-                        })
+                    if db.is_enrolled(student["id"], streamer.session_class_id):
+                        logged = db.log_attendance(
+                            student["id"],
+                            streamer.session_class_id,
+                            session_date=streamer.session_date,
+                            method="face",
+                            confidence=dist,
+                            marked_by=streamer.lecturer_id
+                        )
+                        streamer.marked_ids.add(student["id"])
+                        streamer.marked_ids.add(name)
+                        if logged:
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            streamer.marked_names.append({
+                                "time": ts,
+                                "name": name,
+                                "conf": f"{dist:.2f}" if dist else "—"
+                            })
+                    else:
+                        # Optional: Log that an unenrolled face was seen?
+                        pass
 
     return {
         "recognized": recognized,
