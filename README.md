@@ -6,9 +6,9 @@ A facial recognition attendance system that measures its own bias across skin to
 
 ## What It Does
 
-Students enroll by capturing or uploading 5 face photos via their browser camera. Lecturers start live sessions where the browser identifies students in real time using WebRTC (`getUserMedia`) and logs attendance automatically. The admin dashboard shows system stats, manages users and classes, and runs bias evaluations using the Gender Shades methodology.
+Students enroll by capturing or uploading 5 face photos via their browser camera (with automatic external USB camera discovery via `enumerateDevices` and a selector for built-in vs USB). Lecturers start live sessions where the browser identifies **multiple students simultaneously** in real time using WebRTC (`getUserMedia`) and logs attendance automatically. The admin dashboard shows system stats, manages users and classes, and runs bias evaluations using the Gender Shades methodology.
 
-The system ships with two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). If dlib fails to install, the system degrades to LBPH without crashing. The browser-based camera architecture means the backend runs on any headless VPS without a physical webcam.
+The system ships with two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). If dlib fails to install, the system degrades to LBPH without crashing. The browser-based camera architecture means the backend runs on any headless VPS without a physical webcam, while the desktop/server MJPEG path supports Windows `CAP_DSHOW` for external USB cameras and a diagnostic `GET /api/camera/list` probe.
 
 ---
 
@@ -102,12 +102,13 @@ python main.py
 - Dashboard with class overview
 - Log in using **Staff ID**
 - Manage own classes, departments, and enrollment
-- Start/stop live attendance sessions with real-time recognition (using full frame dlib landmark contexts)
+- Start/stop live attendance sessions with real-time **multi-face** recognition (using full frame dlib landmark contexts) and **external USB camera selector** (browser `enumerateDevices` + `deviceId` constraint, with automatic fallback to browser when server camera is unavailable)
 - Log manual attendance for students not recognized by camera
+- Diagnostics via `GET /api/camera/list` (probe indices 0-4) and `GET /api/session/live` (`camera_active` flag)
 
 ### Student
 - Dashboard with attendance history and per-class breakdown
-- Face enrollment (capture via WebRTC camera featuring **3-frame automated live liveness scan** or upload files, validate, confirm)
+- Face enrollment (capture via WebRTC camera featuring **3-frame automated live liveness scan** or upload files, validate, confirm) with **external USB camera selector** when multiple video inputs are present
 - Settings (account info, retrain face model)
 
 ---
@@ -229,15 +230,21 @@ Running computer vision models in resource-constrained cloud servers (e.g. 2GB R
 *   **SSL Delegation**: Caddy is configured for internal HTTP (`http://`) to delegate SSL certificate termination to the Nest host proxy, solving ACME handshake blocks.
 *   **Recognizer Caching**: The backend caches the `Recognizer` instance in memory on start and invalidates it only when user rosters are modified. This avoids concurrent disk reads/loads per frame, dramatically reducing CPU overhead and eliminating Segmentation Fault (SEGV) process crashes.
 
+### Camera Discovery & Multi-Face Handling
+
+*   **External USB Support**: Browser path uses `navigator.mediaDevices.enumerateDevices()` to list `videoinput` devices, presents a selector when `>1` camera is present, and requests `getUserMedia({ video: { deviceId: { exact } } })` to target external USB cameras. The server MJPEG path uses `cv2.CAP_DSHOW` on Windows for reliable external USB open and falls back without flag on Linux.
+*   **Diagnostics**: `GET /api/camera/list?max_index=4` probes indices 0-4 with read verification; `POST /api/session/start` now returns `camera_active`, and `GET /api/session/live` exposes `camera_active` for immediate frontend fallback to browser mode.
+*   **Multi-Face**: `FaceDetector` Haar tuned to `scaleFactor 1.08, minNeighbors 4, equalizeHist, CASCADE_SCALE_IMAGE` for higher recall on 2+ faces in classroom scenes; `Recognizer` and `POST /api/recognize/frame` loop over all detections (not just largest) and log attendance for every known face in the frame; rate limiter exempts ` /api/recognize/frame`, `/api/session/live`, `/api/session/video_feed` (previously `30 req/min` blocked the 1.5s poll loop at ~40 req/min and hid the second face).
+
 ---
 
 ## Known Limitations
 
-- Frontal faces only. The Haar cascade detector struggles with profiles and heavy occlusion.
-- No liveness detection. A photo or video of an enrolled person could fool the system.
-- Lighting sensitivity. Performance drops in poor lighting or strong backlight.
-- Browser camera permissions. Users must grant camera access in their browser.
-- Frame latency. Browser-to-backend round trip adds ~100-250ms per frame.
+- Frontal faces mostly. The Haar cascade handles multi-face classroom scenes well (tuned to `scaleFactor 1.08 / minNeighbors 4 / equalizeHist`) but still struggles with extreme profiles and heavy occlusion; DNN/MTCNN upgrade is planned.
+- Liveness is software-only. The 3-frame 3D landmark variation check blocks 2D photos/iPads, but 3D masks or deepfake replays require IR/depth hardware for enterprise-grade guarantee.
+- Lighting sensitivity reduced. `equalizeHist` improves low-light recall, but harsh shadows or strong backlight still lower detection rate.
+- Browser camera permissions. Users must grant camera access in their browser; external USB selection appears only after permission is granted.
+- Frame latency. Browser-to-backend round trip adds ~100-250ms per frame; recognition polling is exempt from rate limiting (every 1.5s) to sustain multi-face throughput.
 
 ---
 

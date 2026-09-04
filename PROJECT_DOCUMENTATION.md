@@ -9,7 +9,7 @@
 
 ## 2. Abstract
 
-This project builds a facial recognition attendance system with bias evaluation across demographic groups. It uses OpenCV's Haar Cascade for face detection and two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). A FastAPI backend serves a React frontend where the browser captures video via WebRTC (`getUserMedia`) and sends frames to the backend for recognition. This architecture eliminates the need for a server-side camera, enabling deployment on headless VPS instances. The bias evaluation module applies the Gender Shades methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories.
+This project builds a facial recognition attendance system with bias evaluation across demographic groups. It uses OpenCV's Haar Cascade (tuned for multi-face: `scaleFactor 1.08, minNeighbors 4, equalizeHist`) for face detection and two recognition engines: dlib's 128-D ResNet encoder (primary) and OpenCV LBPH (fallback). A FastAPI backend serves a React frontend where the browser captures video via WebRTC (`getUserMedia` + `enumerateDevices` for external USB discovery) and sends frames to the backend for recognition. The architecture supports both browser-camera mode (headless VPS) and server-side MJPEG streaming with Windows `CAP_DSHOW` for external USB, plus a diagnostic `GET /api/camera/list` probe. The bias evaluation module applies the Gender Shades methodology, measuring recognition accuracy across the Fitzpatrick skin type scale (Types I-VI) and gender categories.
 
 ---
 
@@ -107,12 +107,13 @@ frontend/ (React + TypeScript + Vite)
 ### 5.3 Data Flow
 
 ```
-Browser getUserMedia → Canvas Capture → Base64 JPEG
+Browser enumerateDevices → getUserMedia({deviceId}) → Canvas Capture → Base64 JPEG
   → POST /api/recognize/frame → Decode JPEG → Downscale (25%)
-  → Face Detection (Haar/DNN) → Face Encoding (128-D dlib or LBPH)
+  → Face Detection (Haar/DNN, equalizeHist, multi-face) → Face Encoding (128-D dlib or LBPH, all faces)
   → Euclidean Distance Match Against Known Faces
-  → Identity + Confidence → SQLite Attendance Log
-  → JSON Response → React Frontend (bounding boxes + names)
+  → Identity + Confidence (×N faces) → SQLite Attendance Log (dedup per face)
+  → JSON Response {recognized:[...], total_faces, known_faces} → React Frontend (bounding boxes ×N + selector for USB)
+Fallback: POST /api/session/start → GET /api/camera/list probe → GET /api/session/video_feed MJPEG (CAP_DSHOW on Windows)
 ```
 
 ---
@@ -141,12 +142,12 @@ Browser getUserMedia → Canvas Capture → Base64 JPEG
 | Component | Lines | Purpose |
 |-----------|-------|---------|
 | `core/config.py` | 132 | Configuration management |
-| `core/face_detector.py` | 150 | Face detection (Haar/DNN) |
+| `core/face_detector.py` | 176 | Face detection (Haar/DNN, equalizeHist, multi-face tuned) |
 | `core/face_encoder.py` | 415 | Face encoding and matching |
 | `core/data_collector.py` | 138 | Training data capture |
-| `core/recognizer.py` | 124 | Recognition engine |
+| `core/recognizer.py` | 159 | Recognition engine (CAP_DSHOW, multi-face) |
 | `core/database.py` | 609 | SQLite database layer |
-| `core/backend.py` | ~950 | FastAPI backend + frame recognition |
+| `core/backend.py` | ~1369 | FastAPI backend + frame recognition + camera discovery + rate-limit bypass |
 | `core/attendance.py` | 129 | Attendance CSV management |
 | `bias/evaluator.py` | 244 | Bias evaluation metrics |
 | `bias/datasets.py` | 106 | Dataset helpers |
@@ -289,6 +290,20 @@ To make the system robust for real-world deployment (like UNILAG's computer engi
 4. **Form Field Constraints**: Input forms enforce strict validation rules. Matric Numbers and Staff IDs are filtered dynamically to reject non-numeric characters, and emails enforce proper format patterns.
 5. **Toast Notifications**: Built custom responsive toast components that render clean notification cards for errors and success messages, replacing generic native browser alert dialogs.
 
+### 10.5 External Camera Discovery & Multi-Face Robustness
+
+Classroom deployment surfaced two usability gaps: external USB cameras not selectable, and rapid polling hiding the second face in multi-person frames.
+
+**External USB Discovery (Browser + Server)**
+* Browser path: `LiveSession.tsx` and `Enrollment.tsx` call `navigator.mediaDevices.enumerateDevices()` after priming permission with a transient `getUserMedia({video:true})`, filter `videoinput`, and render a `<select>` when `>1` device is present. `startCamera(deviceId)` requests `getUserMedia({ video: { deviceId: { exact: deviceId } } })` to target USB, stops prior tracks, and re-binds on `devicechange` events.
+* Server MJPEG path: `core/recognizer.py:start_camera()` and `core/backend.py:CameraStreamer` use `cv2.CAP_DSHOW` on Windows for reliable external USB open, with fallback to default flag on Linux/RTSP strings.
+* Diagnostics: `GET /api/camera/list?max_index=4` probes indices with read verification; `POST /api/session/start` returns `camera_active`, and `GET /api/session/live` exposes it so the frontend immediately falls back to browser mode when `camera_active=false` (VPS without webcam).
+
+**Multi-Face Detection & Throughput**
+* `core/face_detector.py:_detect_haar()` tuned from `scaleFactor 1.1 / minNeighbors 5` to `1.08 / 4` + `cv2.equalizeHist` + `CASCADE_SCALE_IMAGE` for higher recall on 2+ faces without spiking false positives; `minSize` lowered to `(28,28)`.
+* `core/recognizer.py:process_frame()` and `core/backend.py:POST /api/recognize/frame` loop over *all* `face_locations` (not largest-only), fixing the liveness crop coordinate bug (was `int(top)` on scaled coords → tiny patch; now `int(top_s/scale)` correctly maps to original frame) and logging attendance per known face with per-face dedup.
+* `core/backend.py:rate_limit_middleware` exempts ` /api/recognize/frame`, `/api/session/live`, `/api/session/video_feed` from the `30 req/min` general limiter (the 1.5s poll loop alone is ~40 req/min and was returning `429` after 30s, silently dropping the second face in `catch{}`).
+
 ---
 
 ## 11. Presentation Talking Points
@@ -320,11 +335,12 @@ To make the system robust for real-world deployment (like UNILAG's computer engi
 | Area | Limitation | Impact |
 |------|-----------|--------|
 | **Deepfake/Mask Spoofing** | 3D landmark tracking prevents 2D photo attacks, but may not stop sophisticated 3D masks or advanced deepfake video replays | Requires multi-modal sensor (IR/Depth) for true enterprise security |
-| **Lighting Sensitivity** | Haar Cascade accuracy degrades under harsh shadows or backlighting | Reduced detection rate in poorly lit rooms |
-| **Single Camera** | Only one camera stream active at a time | Cannot cover multiple entrance points simultaneously |
+| **Lighting Sensitivity** | Haar Cascade degrades less after `equalizeHist` tuning, but harsh shadows or strong backlight still lower recall | Reduced detection rate in poorly lit rooms; DNN/MTCNN upgrade planned |
+| **Camera Coverage** | One logical stream at a time; external USB vs built-in is selectable, but simultaneous multi-camera aggregation is not yet implemented | Cannot cover multiple entrance points simultaneously |
 | **Database** | SQLite is single-writer; no concurrent write scaling | Unsuitable for multi-server horizontal deployment |
 | **Authentication** | No JWT/session tokens; frontend-only route protection | API endpoints accessible without auth headers |
 | **Bias Dataset** | Evaluation requires manually annotated demographic images | Results depend on dataset size and representativeness |
+| **Multi-Face Throughput** | Multi-face now supported (all faces per frame); extreme crowd scenes (>6 faces at 640×480, 0.25 scale) may still drop distant faces due to `minSize` | Increase `FRAME_SCALE` to 0.35 or resolution to 720p for large groups |
 
 ### 12.2 Future Improvements
 
