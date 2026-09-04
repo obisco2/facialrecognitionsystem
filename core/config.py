@@ -128,6 +128,24 @@ class Config:
         return self.get("Security", "ADMIN_PASSWORD", "admin")
 
     @property
+    def jwt_secret(self):
+        import os
+        return os.getenv("JWT_SECRET") or self.get("Security", "JWT_SECRET", "dev-insecure-change-me")
+
+    @property
+    def jwt_refresh_secret(self):
+        import os
+        return os.getenv("JWT_REFRESH_SECRET") or self.get("Security", "JWT_REFRESH_SECRET", "dev-insecure-refresh-change-me")
+
+    @property
+    def access_token_expire_minutes(self):
+        return self.getint("Security", "ACCESS_TOKEN_EXPIRE_MINUTES", 15)
+
+    @property
+    def refresh_token_expire_days(self):
+        return self.getint("Security", "REFRESH_TOKEN_EXPIRE_DAYS", 7)
+
+    @property
     def db_path(self):
         return os.path.join(self.base_dir, self.get("Database", "DB_PATH", "data/users.db"))
 

@@ -12,11 +12,62 @@ class ApiError extends Error {
   }
 }
 
+function getAccessToken(): string | null {
+  return localStorage.getItem('attendiq.access_token')
+}
+function getRefreshToken(): string | null {
+  return localStorage.getItem('attendiq.refresh_token')
+}
+export function clearTokens() {
+  localStorage.removeItem('attendiq.access_token')
+  localStorage.removeItem('attendiq.refresh_token')
+}
+export function setTokens(access: string, refresh: string) {
+  localStorage.setItem('attendiq.access_token', access)
+  localStorage.setItem('attendiq.refresh_token', refresh)
+}
+
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+  const headers: Record<string, string> = {
+    ...(opts.headers as Record<string, string> | undefined),
+  }
+  // Attach JWT unless caller already set Authorization
+  const token = getAccessToken()
+  if (token && !headers['Authorization'] && !headers['authorization']) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  // Only set JSON content-type if not FormData
+  const isForm = opts.body instanceof FormData
+  if (!isForm && !headers['Content-Type']) headers['Content-Type'] = 'application/json'
+
+  let res = await fetch(`${BASE}${path}`, {
     ...opts,
+    headers,
   })
+  // Auto-refresh on 401 once
+  if (res.status === 401 && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
+    const refresh = getRefreshToken()
+    if (refresh) {
+      try {
+        const r = await fetch(`${BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refresh }),
+        })
+        if (r.ok) {
+          const data = await r.json()
+          setTokens(data.access_token, data.refresh_token)
+          // retry original request with new token
+          headers['Authorization'] = `Bearer ${data.access_token}`
+          res = await fetch(`${BASE}${path}`, { ...opts, headers })
+        } else {
+          clearTokens()
+        }
+      } catch {
+        clearTokens()
+      }
+    }
+  }
   if (!res.ok) {
     let detail = res.statusText
     try {
@@ -120,8 +171,13 @@ export interface SystemConfig {
 }
 
 // --- Auth ---
+export type AuthResponse = User & { access_token: string; refresh_token: string; token_type: string }
 export const login = (identifier: string, password: string) =>
-  post<User>('/auth/login', { identifier, password })
+  post<AuthResponse>('/auth/login', { identifier, password })
+export const refreshTokens = (refresh_token: string) =>
+  post<AuthResponse>('/auth/refresh', { refresh_token })
+export const logout = (refresh_token: string) =>
+  post<{ status: string }>('/auth/logout', { refresh_token })
 
 // --- Users ---
 export const getUsers = (role?: Role) => get<User[]>(`/users${role ? `?role=${role}` : ''}`)

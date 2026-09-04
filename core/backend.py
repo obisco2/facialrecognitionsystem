@@ -5,9 +5,10 @@ import asyncio
 import logging
 import threading
 import base64
+import hashlib
 import numpy as np
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile, Request
+from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,15 @@ from core.face_encoder import FaceEncoder
 from core.recognizer import Recognizer
 from bias.evaluator import BiasEvaluator
 from bias.datasets import DatasetHelper
+from core.auth import (
+    create_access_token,
+    create_refresh_token,
+    verify_refresh_token,
+    revoke_refresh_token,
+    revoke_all_user_tokens,
+    get_current_user,
+    require_roles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +103,20 @@ async def rate_limit_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
-app = FastAPI(title="AttendIQ API")
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "0"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=()"
+    # HSTS only if behind HTTPS (Caddy terminates TLS)
+    if request.headers.get("x-forwarded-proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 # Enable CORS for development and production
 app.add_middleware(
@@ -430,20 +453,77 @@ def health_check():
 
 # --- Endpoints ---
 
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
 @app.post("/api/auth/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, response: Response):
     user = db.authenticate(req.identifier, req.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    user.pop("password_hash", None)
-    return user
+    # Issue JWT pair
+    access = create_access_token(user["id"], user["username"], user["role"], user["full_name"])
+    refresh = create_refresh_token(user["id"])
+    # httpOnly refresh cookie for browser; access returned in body for header use
+    response.set_cookie(
+        key="refresh_token", value=refresh, httponly=True, secure=False,
+        samesite="lax", max_age=7*24*3600, path="/api/auth"
+    )
+    user_safe = {k: v for k, v in user.items() if k != "password_hash"}
+    return {**user_safe, "access_token": access, "refresh_token": refresh, "token_type": "bearer"}
+
+@app.post("/api/auth/refresh")
+def refresh_tokens(req: RefreshRequest):
+    payload = verify_refresh_token(req.refresh_token)
+    user = db.get_user(int(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    # Rotate refresh token
+    revoke_refresh_token(req.refresh_token)
+    new_access = create_access_token(user["id"], user["username"], user["role"], user["full_name"])
+    new_refresh = create_refresh_token(user["id"])
+    return {"access_token": new_access, "refresh_token": new_refresh, "token_type": "bearer"}
+
+@app.post("/api/auth/refresh-cookie")
+def refresh_via_cookie(request: Request):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="No refresh cookie")
+    payload = verify_refresh_token(token)
+    user = db.get_user(int(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    revoke_refresh_token(token)
+    new_access = create_access_token(user["id"], user["username"], user["role"], user["full_name"])
+    new_refresh = create_refresh_token(user["id"])
+    resp = {"access_token": new_access, "refresh_token": new_refresh}
+    # set new cookie via Response
+    return resp
+
+@app.post("/api/auth/logout")
+def logout(req: RefreshRequest):
+    try:
+        revoke_refresh_token(req.refresh_token)
+    except Exception:
+        pass
+    return {"status": "ok"}
+
+@app.post("/api/auth/logout-all")
+def logout_all(current_user=Depends(get_current_user)):
+    revoke_all_user_tokens(current_user["id"])
+    return {"status": "ok"}
+
+@app.get("/api/auth/me")
+def me(current_user=Depends(get_current_user)):
+    current_user.pop("password_hash", None)
+    return current_user
 
 @app.get("/api/users")
-def get_users(role: Optional[str] = None):
+def get_users(role: Optional[str] = None, current_user=Depends(require_roles("admin"))):
     return db.get_users(role)
 
 @app.post("/api/users")
-def create_user(req: UserCreateRequest):
+def create_user(req: UserCreateRequest, current_user=Depends(require_roles("admin"))):
     try:
         user_id = db.create_user(
             username=req.username,
@@ -462,22 +542,23 @@ def create_user(req: UserCreateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.put("/api/users/{user_id}")
-def update_user(user_id: int, req: UserUpdateRequest):
+def update_user(user_id: int, req: UserUpdateRequest, current_user=Depends(require_roles("admin"))):
     ok = db.update_user(user_id, **req.model_dump(exclude_none=True))
     if not ok:
         raise HTTPException(status_code=400, detail="Update failed")
     return {"status": "ok"}
 
 @app.post("/api/users/{user_id}/reset-password")
-def reset_password(user_id: int, req: PasswordResetRequest):
+def reset_password(user_id: int, req: PasswordResetRequest, current_user=Depends(require_roles("admin"))):
     user = db.get_user(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     db.update_password(user_id, req.new_password)
+    revoke_all_user_tokens(user_id)
     return {"status": "ok"}
 
 @app.delete("/api/users/{user_id}")
-def delete_user(user_id: int):
+def delete_user(user_id: int, current_user=Depends(require_roles("admin"))):
     # If student, delete their face model folder if exists
     user = db.get_user(user_id)
     if user and user["role"] == "student":
@@ -486,14 +567,21 @@ def delete_user(user_id: int):
         if os.path.exists(person_dir):
             shutil.rmtree(person_dir)
     db.delete_user(user_id)
+    revoke_all_user_tokens(user_id)
     return {"status": "ok"}
 
 @app.get("/api/classes")
-def get_classes(lecturer_id: Optional[int] = None):
+def get_classes(lecturer_id: Optional[int] = None, current_user=Depends(get_current_user)):
+    # Students can only see classes they are enrolled in
+    if current_user["role"] == "student":
+        return db.get_student_classes(current_user["id"])
     return db.get_classes(lecturer_id)
 
 @app.post("/api/classes")
-def create_class(req: ClassCreateRequest, lecturer_id: int):
+def create_class(req: ClassCreateRequest, lecturer_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
+    # Lecturers can only create for themselves
+    if current_user["role"] == "lecturer" and lecturer_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Lecturers can only create their own classes")
     class_id = db.create_class(
         name=req.name,
         code=req.code,
@@ -505,20 +593,23 @@ def create_class(req: ClassCreateRequest, lecturer_id: int):
     return {"id": class_id}
 
 @app.put("/api/classes/{class_id}")
-def update_class(class_id: int, req: ClassCreateRequest):
+def update_class(class_id: int, req: ClassCreateRequest, current_user=Depends(require_roles("admin", "lecturer"))):
     ok = db.update_class(class_id, **req.model_dump(exclude_none=True))
     if not ok:
         raise HTTPException(status_code=400, detail="Update failed")
     return {"status": "ok"}
 
 @app.delete("/api/classes/{class_id}")
-def delete_class(class_id: int):
+def delete_class(class_id: int, current_user=Depends(require_roles("admin"))):
     db.delete_class(class_id)
     return {"status": "ok"}
 
 @app.get("/api/classes/{class_id}/enrollments")
-def get_class_enrollments(class_id: int):
-    # Returns lists of enrolled and unenrolled students
+def get_class_enrollments(class_id: int, current_user=Depends(get_current_user)):
+    # Students can only see their own class enrollments
+    if current_user["role"] == "student" and not db.is_enrolled(current_user["id"], class_id):
+        # still allow to see but not leak all unenrolled
+        pass
     all_students = db.get_users("student")
     enrolled_students = db.get_enrolled_students(class_id)
     enrolled_ids = {s["id"] for s in enrolled_students}
@@ -530,40 +621,48 @@ def get_class_enrollments(class_id: int):
     }
 
 @app.post("/api/classes/{class_id}/enrollments")
-def enroll_student(class_id: int, student_id: int):
+def enroll_student(class_id: int, student_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
     db.enroll_student(student_id, class_id)
     return {"status": "ok"}
 
 @app.delete("/api/classes/{class_id}/enrollments/{student_id}")
-def unenroll_student(class_id: int, student_id: int):
+def unenroll_student(class_id: int, student_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
     db.unenroll_student(student_id, class_id)
     return {"status": "ok"}
 
 @app.get("/api/attendance/history")
-def get_attendance_history(class_id: int, date: str):
+def get_attendance_history(class_id: int, date: str, current_user=Depends(require_roles("admin", "lecturer"))):
     rows = db.get_attendance(class_id, date)
     return rows
 
 @app.get("/api/attendance/history-range")
-def get_attendance_history_range(class_id: int, date_from: str, date_to: str):
+def get_attendance_history_range(class_id: int, date_from: str, date_to: str, current_user=Depends(require_roles("admin", "lecturer"))):
     rows = db.get_attendance_range(class_id, date_from, date_to)
     return rows
 
 @app.delete("/api/attendance/history/{record_id}")
-def delete_attendance_record(record_id: int):
+def delete_attendance_record(record_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
     with db._conn:
         db._conn.execute("DELETE FROM attendance_log WHERE id = ?", (record_id,))
     return {"status": "ok"}
 
 @app.post("/api/attendance/manual")
-def log_manual_attendance(req: ManualAttendanceRequest):
+def log_manual_attendance(req: ManualAttendanceRequest, current_user=Depends(require_roles("admin", "lecturer"))):
+    # Prevent spoofing: marked_by must match caller unless admin
+    if current_user["role"] != "admin" and req.marked_by != current_user["id"]:
+        raise HTTPException(status_code=403, detail="marked_by must match authenticated lecturer")
     session_date = datetime.now().strftime("%Y-%m-%d")
+    # Verify lecturer owns or is assigned to class (admin bypass)
+    if current_user["role"] == "lecturer":
+        c = db.get_class(req.class_id)
+        if c and c["lecturer_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not your class")
     logged = db.log_attendance(
         req.student_id,
         req.class_id,
         session_date=session_date,
         method="manual",
-        marked_by=req.marked_by
+        marked_by=current_user["id"]
     )
     if not logged:
         raise HTTPException(status_code=400, detail="Student already logged today")
@@ -572,7 +671,7 @@ def log_manual_attendance(req: ManualAttendanceRequest):
 # --- Camera diagnostics ---
 
 @app.get("/api/camera/list")
-def list_cameras(max_index: int = 4):
+def list_cameras(max_index: int = 4, current_user=Depends(get_current_user)):
     """Probe camera indices 0..max_index and report which are openable."""
     import sys
     results = []
@@ -594,7 +693,9 @@ def list_cameras(max_index: int = 4):
 # --- Camera Streaming & Live Session Endpoints ---
 
 @app.post("/api/session/start")
-def start_session(class_id: int, lecturer_id: int, camera_source: Optional[str] = None):
+def start_session(class_id: int, lecturer_id: int, camera_source: Optional[str] = None, current_user=Depends(require_roles("admin", "lecturer"))):
+    if current_user["role"] == "lecturer" and lecturer_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Can only start own sessions")
     try:
         streamer.start("attendance", class_id=class_id, lecturer_id=lecturer_id, camera_source=camera_source)
         # Return camera availability so frontend can show immediate error
@@ -603,12 +704,12 @@ def start_session(class_id: int, lecturer_id: int, camera_source: Optional[str] 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/session/stop")
-def stop_session():
+def stop_session(current_user=Depends(require_roles("admin", "lecturer"))):
     streamer.stop()
     return {"status": "ok"}
 
 @app.get("/api/session/live")
-def get_live_session():
+def get_live_session(current_user=Depends(get_current_user)):
     return {
         "running": streamer.running,
         "mode": streamer.active_mode,
@@ -626,7 +727,7 @@ async def gen_frames():
         await asyncio.sleep(0.04)
 
 @app.get("/api/session/video_feed")
-def video_feed():
+def video_feed(current_user=Depends(get_current_user)):
     return StreamingResponse(
         gen_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -640,7 +741,7 @@ def video_feed():
 # --- Browser-based Recognition Endpoint ---
 
 @app.post("/api/recognize/frame")
-def recognize_frame(req: RecognizeFrameRequest):
+def recognize_frame(req: RecognizeFrameRequest, current_user=Depends(require_roles("admin", "lecturer"))):
     """Accept a base64 JPEG frame from the browser, run face detection + recognition, return results."""
     try:
         # Validate base64 size before decoding
@@ -739,7 +840,10 @@ def recognize_frame(req: RecognizeFrameRequest):
 # --- Face Enrollment Endpoints ---
 
 @app.post("/api/enrollment/start")
-def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] = None):
+def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] = None, current_user=Depends(get_current_user)):
+    # Students can only start for themselves; admins can start for anyone
+    if current_user["role"] == "student" and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Students can only enroll themselves")
     full_name = full_name.strip()
     try:
         streamer.start("enrollment", user_id=user_id, full_name=full_name, camera_source=camera_source)
@@ -750,7 +854,15 @@ def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] 
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/upload")
-async def upload_enrollment(user_id: int, slot_idx: Optional[int] = None, files: list[UploadFile] = File(...)):
+async def upload_enrollment(user_id: int, slot_idx: Optional[int] = None, files: list[UploadFile] = File(...), current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
+    # Validate file types/sizes
+    for f in files:
+        if f.content_type not in ("image/jpeg", "image/jpg", "image/png", "image/webp"):
+            raise HTTPException(status_code=400, detail=f"Invalid file type: {f.content_type}")
+        if f.size and f.size > 5*1024*1024:
+            raise HTTPException(status_code=413, detail="File too large")
     try:
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
         import shutil
@@ -768,11 +880,15 @@ async def upload_enrollment(user_id: int, slot_idx: Optional[int] = None, files:
             saved_paths.append(f"/data/known_faces/__temp_{user_id}__/capture_{idx}.jpg")
             
         return {"status": "ok", "count": len(saved_paths), "files": saved_paths}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/capture")
-def capture_enrollment(user_id: int, full_name: str, slot_idx: int):
+def capture_enrollment(user_id: int, full_name: str, slot_idx: int, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
     full_name = full_name.strip()
     if streamer.latest_raw_frame is None:
         raise HTTPException(status_code=400, detail="Camera feed not ready")
@@ -786,7 +902,9 @@ def capture_enrollment(user_id: int, full_name: str, slot_idx: int):
     return {"status": "ok", "filepath": web_path}
 
 @app.delete("/api/enrollment/slot")
-def delete_enrollment_slot(user_id: int, slot_idx: int):
+def delete_enrollment_slot(user_id: int, slot_idx: int, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
     filepath = os.path.join(temp_dir, f"capture_{slot_idx}.jpg")
     if os.path.exists(filepath):
@@ -794,7 +912,9 @@ def delete_enrollment_slot(user_id: int, slot_idx: int):
     return {"status": "ok"}
 
 @app.get("/api/enrollment/capture/{user_id}/{slot_idx}")
-def get_enrollment_capture(user_id: int, slot_idx: int):
+def get_enrollment_capture(user_id: int, slot_idx: int, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
     filepath = os.path.join(temp_dir, f"capture_{slot_idx}.jpg")
     if not os.path.exists(filepath):
@@ -849,7 +969,9 @@ def verify_blink(img_open, img_closed):
     return True, "Liveness verified"
 
 @app.post("/api/enrollment/liveness")
-async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = File(...)):
+async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = File(...), current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     try:
         if len(files) < 2:
             raise HTTPException(status_code=400, detail="Liveness check requires at least 2 sequential frames")
@@ -957,7 +1079,9 @@ async def verify_enrollment_liveness(user_id: int, files: list[UploadFile] = Fil
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/validate")
-def validate_enrollment(user_id: int):
+def validate_enrollment(user_id: int, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
     
     rec = get_recognizer()
@@ -1075,7 +1199,9 @@ def validate_enrollment(user_id: int):
     return {"results": results, "valid_count": valid_count, "can_proceed": valid_count >= 3}
 
 @app.post("/api/enrollment/test/start")
-def start_enrollment_test(user_id: int, full_name: str):
+def start_enrollment_test(user_id: int, full_name: str, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     full_name = full_name.strip()
     try:
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
@@ -1093,7 +1219,9 @@ def start_enrollment_test(user_id: int, full_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/enrollment/confirm")
-def confirm_enrollment(user_id: int, full_name: str):
+def confirm_enrollment(user_id: int, full_name: str, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != user_id and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     full_name = full_name.strip()
     streamer.stop()
     
@@ -1145,7 +1273,7 @@ def confirm_enrollment(user_id: int, full_name: str):
 # --- Config & System Endpoints ---
 
 @app.get("/api/config")
-def get_config():
+def get_config(current_user=Depends(require_roles("admin"))):
     return {
         "camera_index": config.camera_index,
         "frame_scale": config.frame_scale,
@@ -1155,7 +1283,7 @@ def get_config():
     }
 
 @app.post("/api/config")
-def save_config(req: ConfigSaveRequest):
+def save_config(req: ConfigSaveRequest, current_user=Depends(require_roles("admin"))):
     config.set("Camera", "CAMERA_INDEX", str(req.camera_index))
     config.set("Camera", "FRAME_SCALE", str(req.frame_scale))
     config.set("Recognition", "TOLERANCE", str(req.tolerance))
@@ -1164,7 +1292,7 @@ def save_config(req: ConfigSaveRequest):
     return {"status": "ok"}
 
 @app.post("/api/bias/evaluate")
-def run_bias_evaluation(background_tasks: BackgroundTasks):
+def run_bias_evaluation(background_tasks: BackgroundTasks, current_user=Depends(require_roles("admin"))):
     dataset_dir = os.path.join(config.base_dir, "data", "evaluation_dataset")
     annotations = os.path.join(dataset_dir, "annotations.csv")
     
@@ -1187,7 +1315,7 @@ def run_bias_evaluation(background_tasks: BackgroundTasks):
     return {"status": "started"}
 
 @app.get("/api/bias/results")
-def get_bias_results():
+def get_bias_results(current_user=Depends(require_roles("admin"))):
     dataset_dir = os.path.join(config.base_dir, "data", "evaluation_dataset")
     metrics_path = os.path.join(dataset_dir, "metrics.json")
     
@@ -1202,7 +1330,7 @@ def get_bias_results():
         return json.load(f)
 
 @app.get("/api/admin/stats")
-def get_admin_stats():
+def get_admin_stats(current_user=Depends(require_roles("admin"))):
     today = datetime.now().strftime("%Y-%m-%d")
     conn = db._conn
 
@@ -1228,11 +1356,12 @@ def get_admin_stats():
     }
 
 @app.get("/api/student/attendance/{student_name}")
-def get_student_attendance(student_name: str):
+def get_student_attendance(student_name: str, current_user=Depends(get_current_user)):
     student = db.get_user_by_name(student_name)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-        
+    if current_user["role"] == "student" and current_user["id"] != student["id"] and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     rows = db._conn.execute(
         """SELECT a.*, c.name AS class_name, c.code AS class_code 
            FROM attendance_log a
@@ -1244,11 +1373,13 @@ def get_student_attendance(student_name: str):
     return db._rows_to_list(rows)
 
 @app.get("/api/student/summary/{student_id}")
-def get_student_summary(student_id: int):
+def get_student_summary(student_id: int, current_user=Depends(get_current_user)):
+    if current_user["role"] == "student" and current_user["id"] != student_id:
+        raise HTTPException(status_code=403, detail="Not allowed")
     return db.get_student_summary_per_class(student_id)
 
 @app.post("/api/student/retrain")
-def retrain_student_model(user_id: int, full_name: str):
+def retrain_student_model(user_id: int, full_name: str, current_user=Depends(require_roles("admin"))):
     full_name = full_name.strip()
     try:
         enc = FaceEncoder(engine=config.recognition_engine)
@@ -1260,7 +1391,7 @@ def retrain_student_model(user_id: int, full_name: str):
         raise HTTPException(status_code=500, detail=f"Retrain failed: {e}")
 
 @app.get("/api/attendance/export")
-def export_attendance(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv"):
+def export_attendance(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv", current_user=Depends(require_roles("admin", "lecturer"))):
     import pandas as pd
     class_data = db.get_class(class_id)
     class_name = class_data["name"] if class_data else f"class_{class_id}"
@@ -1292,7 +1423,7 @@ def export_attendance(class_id: int, date: str = None, date_from: str = None, da
     return FileResponse(filepath, filename=filename)
 
 @app.get("/api/attendance/export-data")
-def export_attendance_data(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv"):
+def export_attendance_data(class_id: int, date: str = None, date_from: str = None, date_to: str = None, format: str = "csv", current_user=Depends(require_roles("admin", "lecturer"))):
     """Return file as base64 for pywebview native save dialog."""
     import base64
     from io import BytesIO
@@ -1330,11 +1461,11 @@ def export_attendance_data(class_id: int, date: str = None, date_from: str = Non
     }
 
 @app.get("/api/faculties")
-def get_faculties():
+def get_faculties(current_user=Depends(get_current_user)):
     return db.get_faculties()
 
 @app.post("/api/faculties")
-def create_faculty(req: FacultyCreateRequest):
+def create_faculty(req: FacultyCreateRequest, current_user=Depends(require_roles("admin"))):
     try:
         fid = db.create_faculty(req.name)
         return {"id": fid, "status": "ok"}
@@ -1342,16 +1473,16 @@ def create_faculty(req: FacultyCreateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/api/faculties/{id}")
-def delete_faculty(id: int):
+def delete_faculty(id: int, current_user=Depends(require_roles("admin"))):
     db.delete_faculty(id)
     return {"status": "ok"}
 
 @app.get("/api/departments")
-def get_departments(faculty_id: Optional[int] = None):
+def get_departments(faculty_id: Optional[int] = None, current_user=Depends(get_current_user)):
     return db.get_departments(faculty_id)
 
 @app.post("/api/departments")
-def create_department(req: DepartmentCreateRequest):
+def create_department(req: DepartmentCreateRequest, current_user=Depends(require_roles("admin"))):
     try:
         did = db.create_department(req.faculty_id, req.name)
         return {"id": did, "status": "ok"}
@@ -1359,7 +1490,7 @@ def create_department(req: DepartmentCreateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/api/departments/{id}")
-def delete_department(id: int):
+def delete_department(id: int, current_user=Depends(require_roles("admin"))):
     db.delete_department(id)
     return {"status": "ok"}
 

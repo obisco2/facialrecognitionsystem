@@ -304,6 +304,15 @@ Classroom deployment surfaced two usability gaps: external USB cameras not selec
 * `core/recognizer.py:process_frame()` and `core/backend.py:POST /api/recognize/frame` loop over *all* `face_locations` (not largest-only), fixing the liveness crop coordinate bug (was `int(top)` on scaled coords → tiny patch; now `int(top_s/scale)` correctly maps to original frame) and logging attendance per known face with per-face dedup.
 * `core/backend.py:rate_limit_middleware` exempts ` /api/recognize/frame`, `/api/session/live`, `/api/session/video_feed` from the `30 req/min` general limiter (the 1.5s poll loop alone is ~40 req/min and was returning `429` after 30s, silently dropping the second face in `catch{}`).
 
+### 10.6 Security Hardening (JWT + RBAC, Barebones → Protected)
+
+The site shipped with frontend-only route guards and open `curl`-able endpoints (e.g., a student `POST /api/attendance/manual` could mark themselves present). Hardened to:
+
+* **JWT pair**: `POST /api/auth/login` now returns `access_token` + `refresh_token` (`core/auth.py: HS256`, 15m/7d, `jti` + `sha256` hashed `refresh_tokens` table). `POST /api/auth/refresh` rotates, `POST /api/auth/logout` revokes one, `POST /api/auth/logout-all` revokes all, `GET /api/auth/me` validates. Secrets from `JWT_SECRET` env or `[Security] jwt_secret` (`config.py:131`, `config.ini:32-33` — `secrets.token_hex(32)` generated `0d9c2a30...` / `ad8248bf...`). `PyJWT + cryptography` added to `requirements.txt`.
+* **RBAC**: `get_current_user` / `require_roles()` guard every route. `POST /api/recognize/frame`, `POST /api/attendance/manual` (with `marked_by` overwritten to caller + class-ownership check), `POST /api/session/start|stop`, `GET /api/session/video_feed` → `lecturer|admin` only; `POST /api/users`, `DELETE /api/users/{id}`, `GET /api/config`, `GET /api/admin/stats`, `POST /api/bias/*` → `admin` only; enrollment → `student:self|admin`; student summary/attendance → self-or-privileged. Returns `401` without `Authorization: Bearer` and `403` for role mismatch, blocking `curl` spoof.
+* **Frontend**: `frontend/src/lib/api.ts` injects `Authorization` from `attendiq.access_token`, auto-refreshes `401` via `POST /api/auth/refresh`, clears on failure; `frontend/src/lib/auth.tsx` gains `setAuth()` (stores both user + tokens) and `logout()` clears tokens; `frontend/src/pages/Login.tsx:24` now calls `setAuth`.
+* **Transport**: `security_headers_middleware` (`core/backend.py:108`) adds `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `HSTS`; duplicate `app = FastAPI()` initializer removed; CORS `allow_credentials` preserved for `https://attendiq.tadstech.dev`.
+
 ---
 
 ## 11. Presentation Talking Points
@@ -323,8 +332,9 @@ Classroom deployment surfaced two usability gaps: external USB cameras not selec
 3. **What causes bias?** Training dataset composition (demographic imbalance), camera placement and angles, and room lighting all contribute.
 4. **How would you deploy this in production?** Docker Compose for reproducible deployments, move from SQLite to PostgreSQL, add TLS/HTTPS via reverse proxy, use hardware-accelerated CNN models, and add liveness detection (blink analysis or 3D depth).
 5. **What about GDPR?** The system requires explicit enrollment and provides deletion. Passwords are stored with PBKDF2-SHA256 (260K iterations, random salt). A production build would need a privacy notice, consent management, and biometric data encryption.
-6. **How do you handle security?** Rate limiting on all endpoints (30 req/min general, 5 attempts/min on login), PBKDF2 password hashing with automatic legacy hash upgrade, input validation on frame sizes, and parameterised SQL queries prevent injection.
-7. **Why Docker?** Ensures the application runs identically across development, testing, and production. The Dockerfile includes a health check, and docker-compose handles volume mounting for persistent data.
+6. **How do you handle security?** Self-hosted JWT (`HS256` access 15m + refresh 7d with `jti`/`sha256` hashed storage in `refresh_tokens`, `core/auth.py`), RBAC via `get_current_user`/`require_roles` on every endpoint, `PBKDF2-SHA256` 260k + salted, security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `HSTS`), rate limiting (30/min general + 5/min login, exempt video polling), input validation (frame `max_length 10M`, image MIME/size on upload), and parameterised SQL.
+7. **Why not Supabase?** Considered but deferred: self-hosted JWT keeps SQLite + single VPS + desktop `pywebview` intact for the final year project; Supabase (managed Postgres + RLS + GoTrue) is ideal for SaaS scale but needs schema migration, face BLOB storage redesign, and hybrid inference service — planned as the PostgreSQL migration path.
+8. **Why Docker?** Ensures the application runs identically across development, testing, and production. The Dockerfile includes a health check, and docker-compose handles volume mounting for persistent data.
 
 ---
 
@@ -338,15 +348,15 @@ Classroom deployment surfaced two usability gaps: external USB cameras not selec
 | **Lighting Sensitivity** | Haar Cascade degrades less after `equalizeHist` tuning, but harsh shadows or strong backlight still lower recall | Reduced detection rate in poorly lit rooms; DNN/MTCNN upgrade planned |
 | **Camera Coverage** | One logical stream at a time; external USB vs built-in is selectable, but simultaneous multi-camera aggregation is not yet implemented | Cannot cover multiple entrance points simultaneously |
 | **Database** | SQLite is single-writer; no concurrent write scaling | Unsuitable for multi-server horizontal deployment |
-| **Authentication** | No JWT/session tokens; frontend-only route protection | API endpoints accessible without auth headers |
+| **Authentication** | Now JWT + RBAC (self-hosted, HS256, 15m/7d) — previously frontend-only; still no MFA/recovery flow | Add email verification + password reset tokens |
 | **Bias Dataset** | Evaluation requires manually annotated demographic images | Results depend on dataset size and representativeness |
 | **Multi-Face Throughput** | Multi-face now supported (all faces per frame); extreme crowd scenes (>6 faces at 640×480, 0.25 scale) may still drop distant faces due to `minSize` | Increase `FRAME_SCALE` to 0.35 or resolution to 720p for large groups |
 
 ### 12.2 Future Improvements
 
 1. **Anti-Spoofing Sensors**: Upgrade from software-based 3D landmark tracking to hardware-based IR/Depth sensors for enterprise-grade security against deepfakes.
-2. **JWT Authentication**: Add stateless token-based auth with refresh tokens and role-based middleware on the API layer.
-3. **PostgreSQL Migration**: Replace SQLite with PostgreSQL for concurrent write support and production-grade reliability.
+2. **JWT Hardening Next**: Add email verification, password-reset tokens, MFA (TOTP), and audit log table; rotate secrets via env and add `httponly` `Secure` refresh cookie in production behind `https`.
+3. **PostgreSQL Migration (Supabase path)**: Replace SQLite with managed Postgres + RLS + GoTrue (Supabase Auth); migrate `refresh_tokens` to Supabase, move face BLOBs to Storage, and run FastAPI as inference-only service.
 4. **CNN-Based Detection**: Upgrade from Haar Cascade to MTCNN or RetinaFace for higher detection accuracy across demographics.
 5. **CI/CD Pipeline**: Add GitHub Actions for automated testing, linting, and container builds on every push.
 6. **Multi-Camera Support**: Extend the streaming architecture to aggregate frames from multiple camera sources.

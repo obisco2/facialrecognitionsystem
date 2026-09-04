@@ -106,6 +106,17 @@ CREATE INDEX IF NOT EXISTS idx_enrollments_class
     ON enrollments(class_id);
 CREATE INDEX IF NOT EXISTS idx_enrollments_student
     ON enrollments(student_id);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash TEXT    NOT NULL UNIQUE,
+    jti        TEXT    NOT NULL UNIQUE,
+    expires_at TEXT    NOT NULL,
+    created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);
 """
 
 

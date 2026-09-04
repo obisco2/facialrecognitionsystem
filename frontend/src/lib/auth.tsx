@@ -1,10 +1,12 @@
 import { createContext, useContext, useState, useCallback } from 'react'
 import type { User } from './api'
+import { clearTokens, setTokens } from './api'
 
 interface AuthContextValue {
   user: User | null
   setUser: (u: User | null) => void
   logout: () => void
+  setAuth: (u: User & { access_token: string; refresh_token: string }) => void
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -22,9 +24,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     else localStorage.removeItem(STORAGE_KEY)
   }, [])
 
-  const logout = useCallback(() => setUser(null), [setUser])
+  const setAuth = useCallback((u: User & { access_token: string; refresh_token: string }) => {
+    const { access_token, refresh_token, ...userOnly } = u as any
+    setUser(userOnly as User)
+    setTokens(access_token, refresh_token)
+  }, [setUser])
 
-  return <AuthContext.Provider value={{ user, setUser, logout }}>{children}</AuthContext.Provider>
+  const logout = useCallback(() => {
+    clearTokens()
+    setUser(null)
+  }, [setUser])
+
+  return <AuthContext.Provider value={{ user, setUser, logout, setAuth }}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

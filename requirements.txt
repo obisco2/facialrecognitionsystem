@@ -28,6 +28,10 @@ fastapi>=0.110.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9
 
+# Security — JWT
+PyJWT>=2.8.0
+cryptography>=42.0.0
+
 # Testing
 pytest>=8.0.0
 pytest-cov>=5.0.0

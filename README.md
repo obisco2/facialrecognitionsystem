@@ -236,6 +236,16 @@ Running computer vision models in resource-constrained cloud servers (e.g. 2GB R
 *   **Diagnostics**: `GET /api/camera/list?max_index=4` probes indices 0-4 with read verification; `POST /api/session/start` now returns `camera_active`, and `GET /api/session/live` exposes `camera_active` for immediate frontend fallback to browser mode.
 *   **Multi-Face**: `FaceDetector` Haar tuned to `scaleFactor 1.08, minNeighbors 4, equalizeHist, CASCADE_SCALE_IMAGE` for higher recall on 2+ faces in classroom scenes; `Recognizer` and `POST /api/recognize/frame` loop over all detections (not just largest) and log attendance for every known face in the frame; rate limiter exempts ` /api/recognize/frame`, `/api/session/live`, `/api/session/video_feed` (previously `30 req/min` blocked the 1.5s poll loop at ~40 req/min and hid the second face).
 
+### Security Hardening (JWT + RBAC)
+
+Self-hosted JWT was chosen over Supabase to keep a single VPS + desktop `pywebview` deploy with SQLite intact. Supabase would be cleaner for a SaaS (managed Postgres + RLS + GoTrue), but requires migrating the `users`/`attendance_log` schema, face BLOB storage, and running face inference as a hybrid service — deferred until post-project.
+
+*   **JWT pair**: `POST /api/auth/login` returns `access_token` (15m, `HS256`) + `refresh_token` (7d, `jti` + `sha256` hashed in `refresh_tokens` table). `POST /api/auth/refresh` rotates, `POST /api/auth/logout` revokes, `POST /api/auth/logout-all` revokes all. Secrets from `JWT_SECRET` env or `[Security] jwt_secret` (`config.ini` / `config.py:131`) — generated via `secrets.token_hex(32)` (`0d9c2a30...`, `ad8248bf...`).
+*   **RBAC enforcement**: `core/auth.py: get_current_user / require_roles()` guards every endpoint. `POST /api/recognize/frame`, `POST /api/attendance/manual`, `POST /api/session/start|stop`, `GET /api/session/video_feed` require `lecturer|admin` (students get `403` — `curl` spoof blocked). `marked_by` is overwritten to `current_user.id` and class ownership checked. `POST /api/users`, `GET /api/config`, `GET /api/admin/stats`, `POST /api/bias/*` require `admin`. Enrollment endpoints enforce `student.can_only_self`.
+*   **Client-side spoof blocked**: A student `curl -X POST /api/attendance/manual` without `Authorization: Bearer <lecturer JWT>` now returns `401`; with a student JWT returns `403`. Face `POST /api/recognize/frame` likewise rejects student tokens, and `is_enrolled` + `duplicate_prevention` still apply.
+*   **Frontend**: `frontend/src/lib/api.ts` attaches `Authorization: Bearer` from `localStorage` (`attendiq.access_token`), auto-refreshes on `401` via `POST /api/auth/refresh`, and `frontend/src/lib/auth.tsx` stores tokens via `setAuth()` (login) and clears on `logout()` / refresh failure. `GET /api/auth/me` validates session.
+*   **Headers & transport**: `security_headers_middleware` adds `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy: camera=(self)`, and `HSTS` when `x-forwarded-proto=https` (Caddy). `requirements.txt` adds `PyJWT` + `cryptography`. `refresh_tokens` table hashed (`sha256`) with `jti` uniqueness prevents replay.
+
 ---
 
 ## Known Limitations

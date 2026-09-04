@@ -11,7 +11,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
-  const { setUser } = useAuth()
+  const { setAuth } = useAuth()
   const navigate = useNavigate()
 
   async function handleSubmit(e: React.FormEvent) {
@@ -19,9 +19,9 @@ export default function Login() {
     setError(null)
     setLoading(true)
     try {
-      const user = await login(identifier, password)
-      setUser(user)
-      navigate(`/${user.role}`)
+      const data = await login(identifier, password)
+      setAuth(data)
+      navigate(`/${data.role}`)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Something went wrong')
     } finally {
