@@ -354,4 +354,22 @@ export const verifyLiveness = (userId: number, files: File[]) => {
   })
 }
 
+// --- Class blocks (lecturer control) ---
+export const getBlocked = (classId: number) => get<{ id: number; student_id: number; full_name: string; matric: string; reason?: string }[]>(`/classes/${classId}/blocks`)
+export const blockStudent = (classId: number, studentId: number, reason?: string) =>
+  post<{ status: string }>(`/classes/${classId}/blocks`, { student_id: studentId, reason })
+export const unblockStudent = (classId: number, studentId: number) =>
+  del<{ status: string }>(`/classes/${classId}/blocks/${studentId}`)
+export const getUnassigned = () => get<SchoolClass[]>(`/classes/unassigned`)
+export const assignSelf = (classId: number, lecturerId: number) =>
+  post<{ status: string }>(`/classes/${classId}/assign`, { lecturer_id: lecturerId })
+
+// --- Security Q/PIN ---
+export const setupSecurity = (question: string, answer: string, pin: string) =>
+  post<{ status: string }>(`/auth/setup-security`, { question, answer, pin })
+export const getSecurityQuestion = (identifier: string) =>
+  get<{ question: string }>(`/auth/security-question?identifier=${encodeURIComponent(identifier)}`)
+export const resetWithSecurity = (identifier: string, new_password: string, answer?: string, pin?: string) =>
+  post<{ status: string }>(`/auth/reset-with-security`, { identifier, new_password, answer, pin })
+
 export { ApiError }

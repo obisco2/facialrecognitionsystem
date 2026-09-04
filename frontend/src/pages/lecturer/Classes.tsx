@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Users as UsersIcon, X } from 'lucide-react'
+import { Plus, Trash2, Users as UsersIcon, X, Ban, ShieldOff, UserPlus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog } from '@/components/ui/dialog'
@@ -13,6 +13,11 @@ import {
   enrollStudent,
   unenrollStudent,
   getDepartments,
+  getBlocked,
+  blockStudent,
+  unblockStudent,
+  getUnassigned,
+  assignSelf,
 } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth'
@@ -62,6 +67,18 @@ export default function LecturerClasses() {
     onError: (err: Error) => showToast('error', err.message || 'Failed to delete class'),
   })
 
+  const { data: unassigned } = useQuery({ queryKey: ['unassigned'], queryFn: getUnassigned })
+
+  const assignMut = useMutation({
+    mutationFn: (classId: number) => assignSelf(classId, user!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classes', user?.id] })
+      qc.invalidateQueries({ queryKey: ['unassigned'] })
+      showToast('success', 'Assigned to class')
+    },
+    onError: (e: Error) => showToast('error', e.message),
+  })
+
   if (!user) return null
 
   return (
@@ -69,12 +86,29 @@ export default function LecturerClasses() {
       <div className="page-header">
         <div>
           <h1 className="mb-1">My classes</h1>
-          <p className="text-sm text-ink-3">Manage your classes and student enrollment.</p>
+          <p className="text-sm text-ink-3">Manage your classes, blocks and assignment.</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="size-4" /> New class
         </Button>
       </div>
+
+      {unassigned && unassigned.length > 0 && (
+        <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3">
+          <p className="mb-2 text-sm font-medium text-amber-900">Unassigned courses — claim one:</p>
+          <div className="flex flex-wrap gap-2">
+            {unassigned.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => assignMut.mutate(c.id)}
+                className="rounded border border-amber-300 bg-white px-3 py-1 text-sm hover:bg-amber-100"
+              >
+                <UserPlus className="mr-1 inline size-3" /> {c.code} — {c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Table>
         <Thead>
@@ -157,6 +191,7 @@ export default function LecturerClasses() {
 function EnrollmentManager({ classId, onClose }: { classId: number; onClose: () => void }) {
   const qc = useQueryClient()
   const { data } = useQuery({ queryKey: ['enrollments', classId], queryFn: () => getClassEnrollments(classId) })
+  const { data: blocked } = useQuery({ queryKey: ['blocks', classId], queryFn: () => getBlocked(classId) })
 
   const enrollMut = useMutation({
     mutationFn: (studentId: number) => enrollStudent(classId, studentId),
@@ -168,22 +203,67 @@ function EnrollmentManager({ classId, onClose }: { classId: number; onClose: () 
     onSuccess: () => qc.invalidateQueries({ queryKey: ['enrollments', classId] }),
     onError: (err: Error) => showToast('error', err.message || 'Failed to unenroll student'),
   })
+  const blockMut = useMutation({
+    mutationFn: (studentId: number) => blockStudent(classId, studentId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['blocks', classId] })
+      qc.invalidateQueries({ queryKey: ['enrollments', classId] })
+      showToast('success', 'Student blocked from class')
+    },
+    onError: (e: Error) => showToast('error', e.message),
+  })
+  const unblockMut = useMutation({
+    mutationFn: (studentId: number) => unblockStudent(classId, studentId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['blocks', classId] })
+      showToast('success', 'Unblocked')
+    },
+    onError: (e: Error) => showToast('error', e.message),
+  })
+
+  const blockedIds = new Set(blocked?.map((b) => b.student_id))
 
   return (
-    <Dialog open onClose={onClose} title="Manage enrollment">
+    <Dialog open onClose={onClose} title="Manage enrollment & blocks">
       <div className="enroll-grid">
         <div>
           <p className="mb-2 font-mono-label text-ink-3">Enrolled ({data?.enrolled.length ?? 0})</p>
-          <ul className="max-h-64 space-y-1 overflow-y-auto">
+          <ul className="max-h-56 space-y-1 overflow-y-auto">
             {data?.enrolled.map((s) => (
               <li key={s.id} className="flex items-center justify-between rounded-[var(--radius-sm)] border border-rule px-2.5 py-1.5 text-sm">
-                {s.full_name}
-                <button onClick={() => unenrollMut.mutate(s.id)} className="text-ink-3 hover:text-danger">
-                  <X className="size-3.5" />
-                </button>
+                <span className={blockedIds.has(s.id) ? 'text-danger line-through' : ''}>{s.full_name}</span>
+                <span className="flex gap-1">
+                  {!blockedIds.has(s.id) ? (
+                    <button onClick={() => blockMut.mutate(s.id)} title="Block from attending" className="text-amber-600 hover:text-amber-800">
+                      <Ban className="size-3.5" />
+                    </button>
+                  ) : (
+                    <button onClick={() => unblockMut.mutate(s.id)} title="Unblock" className="text-emerald-600 hover:text-emerald-800">
+                      <ShieldOff className="size-3.5" />
+                    </button>
+                  )}
+                  <button onClick={() => unenrollMut.mutate(s.id)} className="text-ink-3 hover:text-danger">
+                    <X className="size-3.5" />
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
+          {blocked && blocked.length > 0 && (
+            <div className="mt-3 rounded bg-red-50 p-2 text-xs">
+              <p className="font-medium text-red-800">Blocked ({blocked.length})</p>
+              <ul className="mt-1 space-y-1">
+                {blocked.map((b) => (
+                  <li key={b.id} className="flex justify-between">
+                    <span>{b.full_name}</span>
+                    <button onClick={() => unblockMut.mutate(b.student_id)} className="text-emerald-600">
+                      Unblock
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
         <div>
           <p className="mb-2 font-mono-label text-ink-3">Available ({data?.unenrolled.length ?? 0})</p>

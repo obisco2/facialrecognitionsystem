@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { retrainFaceModel } from '@/lib/api'
+import { retrainFaceModel, setupSecurity } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { showToast } from '@/components/ui/toast'
 
 export default function StudentSettings() {
   const { user } = useAuth()
@@ -76,8 +78,35 @@ export default function StudentSettings() {
             </div>
           </CardContent>
         </Card>
+
+        <SecuritySetupCard />
       </div>
     </div>
+  )
+}
+
+function SecuritySetupCard() {
+  const [q, setQ] = useState('')
+  const [a, setA] = useState('')
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  async function save() {
+    if (!q || !a || !pin) return showToast('error','All fields required')
+    if (!/^[0-9]{4,6}$/.test(pin)) return showToast('error','PIN must be 4-6 digits')
+    setBusy(true)
+    try { await setupSecurity(q, a, pin); showToast('success','Security saved — hashed, not visible to admins') } catch(e:any){ showToast('error', e.message)} finally{setBusy(false)}
+  }
+  return (
+    <Card className="max-w-lg">
+      <CardHeader><CardTitle>Security — self reset (hashed, admin-opaque)</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-ink-2">Set a security question + answer and a 4-6 digit emergency PIN. Both are PBKDF2-hashed; admins cannot see them. Either can reset your password from login.</p>
+        <Input placeholder="Security question (e.g. Mother's maiden name?)" value={q} onChange={e=>setQ(e.target.value)} />
+        <Input placeholder="Answer" value={a} onChange={e=>setA(e.target.value)} />
+        <Input placeholder="Emergency PIN (4-6 digits)" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,''))} maxLength={6} />
+        <Button onClick={save} loading={busy}>Save security</Button>
+      </CardContent>
+    </Card>
   )
 }
 

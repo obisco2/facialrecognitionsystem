@@ -302,23 +302,26 @@ class CameraStreamer:
                         if self.active_mode == "attendance" and self.session_class_id:
                             student = db.get_user_by_name(name)
                             if student and student["id"] not in self.marked_ids:
-                                logged = db.log_attendance(
-                                    student["id"],
-                                    self.session_class_id,
-                                    session_date=self.session_date,
-                                    method="face",
-                                    confidence=dist,
-                                    marked_by=self.lecturer_id
-                                )
-                                self.marked_ids.add(student["id"])
-                                self.marked_ids.add(name)
-                                if logged:
-                                    ts = datetime.now().strftime("%H:%M:%S")
-                                    self.marked_names.append({
-                                        "time": ts,
-                                        "name": name,
-                                        "conf": f"{dist:.2f}" if dist else "—"
-                                    })
+                                if db.is_blocked(self.session_class_id, student["id"]):
+                                    is_known = False
+                                else:
+                                    logged = db.log_attendance(
+                                        student["id"],
+                                        self.session_class_id,
+                                        session_date=self.session_date,
+                                        method="face",
+                                        confidence=dist,
+                                        marked_by=self.lecturer_id
+                                    )
+                                    self.marked_ids.add(student["id"])
+                                    self.marked_ids.add(name)
+                                    if logged:
+                                        ts = datetime.now().strftime("%H:%M:%S")
+                                        self.marked_names.append({
+                                            "time": ts,
+                                            "name": name,
+                                            "conf": f"{dist:.2f}" if dist else "—"
+                                        })
                         elif self.active_mode == "test":
                             # In test mode, add to marked so frontend polling can detect recognition
                             ts = datetime.now().strftime("%H:%M:%S")
@@ -401,6 +404,24 @@ class UserUpdateRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     new_password: str
+
+class SecuritySetupRequest(BaseModel):
+    question: str = Field(..., min_length=3, max_length=200)
+    answer: str = Field(..., min_length=2, max_length=200)
+    pin: str = Field(..., min_length=4, max_length=6, pattern="^[0-9]{4,6}$")
+
+class SecurityResetRequest(BaseModel):
+    identifier: str
+    new_password: str = Field(..., min_length=6)
+    answer: Optional[str] = None
+    pin: Optional[str] = None
+
+class BlockRequest(BaseModel):
+    student_id: int
+    reason: Optional[str] = None
+
+class AssignLecturerRequest(BaseModel):
+    lecturer_id: int
 
 class ClassCreateRequest(BaseModel):
     name: str
@@ -557,6 +578,32 @@ def reset_password(user_id: int, req: PasswordResetRequest, current_user=Depends
     revoke_all_user_tokens(user_id)
     return {"status": "ok"}
 
+@app.post("/api/auth/setup-security")
+def setup_security(req: SecuritySetupRequest, current_user=Depends(get_current_user)):
+    # Students set own; lecturer/admin can set for any but mainly self
+    db.set_security(current_user["id"], req.question, req.answer, req.pin)
+    return {"status": "ok"}
+
+@app.get("/api/auth/security-question")
+def get_security_question(identifier: str):
+    row = db._conn.execute("SELECT security_question FROM users WHERE username=? OR student_id=? OR email=?", (identifier, identifier, identifier)).fetchone()
+    if not row or not row["security_question"]:
+        raise HTTPException(status_code=404, detail="No security question set")
+    return {"question": row["security_question"]}
+
+@app.post("/api/auth/reset-with-security")
+def reset_with_security(req: SecurityResetRequest):
+    if not req.answer and not req.pin:
+        raise HTTPException(status_code=400, detail="Provide answer or pin")
+    ok = db.reset_password_via_security(req.identifier, req.new_password, req.answer, req.pin)
+    if not ok:
+        raise HTTPException(status_code=401, detail="Invalid answer/pin")
+    # revoke tokens
+    u = db._conn.execute("SELECT id FROM users WHERE username=? OR student_id=? OR email=?", (req.identifier, req.identifier, req.identifier)).fetchone()
+    if u:
+        revoke_all_user_tokens(u["id"])
+    return {"status": "ok"}
+
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: int, current_user=Depends(require_roles("admin"))):
     # If student, delete their face model folder if exists
@@ -576,6 +623,59 @@ def get_classes(lecturer_id: Optional[int] = None, current_user=Depends(get_curr
     if current_user["role"] == "student":
         return db.get_student_classes(current_user["id"])
     return db.get_classes(lecturer_id)
+
+@app.get("/api/classes/unassigned")
+def get_unassigned_classes(current_user=Depends(require_roles("admin", "lecturer"))):
+    return db.get_unassigned_classes()
+
+@app.post("/api/classes/{class_id}/assign")
+def assign_lecturer(class_id: int, req: AssignLecturerRequest, current_user=Depends(require_roles("admin", "lecturer"))):
+    c = db.get_class(class_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Class not found")
+    # Lecturer can only self-assign to unassigned classes
+    if current_user["role"] == "lecturer":
+        if c["lecturer_id"] is not None and c["lecturer_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Class already assigned")
+        if req.lecturer_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Lecturers can only assign themselves")
+    # Admin can assign anyone
+    lec = db.get_user(req.lecturer_id)
+    if not lec or lec["role"] != "lecturer":
+        raise HTTPException(status_code=400, detail="Target is not a lecturer")
+    db.assign_lecturer(class_id, req.lecturer_id)
+    return {"status": "ok"}
+
+@app.get("/api/classes/{class_id}/blocks")
+def get_blocks(class_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
+    c = db.get_class(class_id)
+    if current_user["role"] == "lecturer" and c and c["lecturer_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your class")
+    return db.get_blocked(class_id)
+
+@app.post("/api/classes/{class_id}/blocks")
+def block_student(class_id: int, req: BlockRequest, current_user=Depends(require_roles("admin", "lecturer"))):
+    c = db.get_class(class_id)
+    if not c:
+        raise HTTPException(status_code=404, detail="Class not found")
+    if current_user["role"] == "lecturer" and c["lecturer_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your class")
+    if not db.get_user(req.student_id):
+        raise HTTPException(status_code=404, detail="Student not found")
+    ok = db.block_student(class_id, req.student_id, current_user["id"], req.reason)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Already blocked")
+    return {"status": "ok"}
+
+@app.delete("/api/classes/{class_id}/blocks/{student_id}")
+def unblock_student(class_id: int, student_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
+    c = db.get_class(class_id)
+    if current_user["role"] == "lecturer" and c and c["lecturer_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not your class")
+    ok = db.unblock_student(class_id, student_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return {"status": "ok"}
 
 @app.post("/api/classes")
 def create_class(req: ClassCreateRequest, lecturer_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
@@ -652,6 +752,9 @@ def log_manual_attendance(req: ManualAttendanceRequest, current_user=Depends(req
     if current_user["role"] != "admin" and req.marked_by != current_user["id"]:
         raise HTTPException(status_code=403, detail="marked_by must match authenticated lecturer")
     session_date = datetime.now().strftime("%Y-%m-%d")
+    # Block check
+    if db.is_blocked(req.class_id, req.student_id):
+        raise HTTPException(status_code=403, detail="Student is blocked from this class")
     # Verify lecturer owns or is assigned to class (admin bypass)
     if current_user["role"] == "lecturer":
         c = db.get_class(req.class_id)
@@ -808,7 +911,9 @@ def recognize_frame(req: RecognizeFrameRequest, current_user=Depends(require_rol
                 student = db.get_user_by_name(name)
                 # Ensure student exists, hasn't been marked yet, and IS ENROLLED in this class
                 if student and student["id"] not in streamer.marked_ids:
-                    if db.is_enrolled(student["id"], streamer.session_class_id):
+                    if db.is_blocked(streamer.session_class_id, student["id"]):
+                        is_known = False
+                    elif db.is_enrolled(student["id"], streamer.session_class_id):
                         logged = db.log_attendance(
                             student["id"],
                             streamer.session_class_id,

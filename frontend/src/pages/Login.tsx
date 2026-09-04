@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ScanFace, Mail, Lock, ArrowRight } from 'lucide-react'
+import { ScanFace, Mail, Lock, ArrowRight, KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { login, ApiError } from '@/lib/api'
+import { Dialog } from '@/components/ui/dialog'
+import { login, ApiError, getSecurityQuestion, resetWithSecurity } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 
 export default function Login() {
@@ -13,6 +14,14 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const { setAuth } = useAuth()
   const navigate = useNavigate()
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetId, setResetId] = useState('')
+  const [q, setQ] = useState<string | null>(null)
+  const [ans, setAns] = useState('')
+  const [pin, setPin] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetMsg, setResetMsg] = useState<string | null>(null)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -27,6 +36,16 @@ export default function Login() {
     } finally {
       setLoading(false)
     }
+  }
+  async function fetchQuestion() {
+    if (!resetId) return
+    setResetMsg(null)
+    try { const r = await getSecurityQuestion(resetId); setQ(r.question) } catch (e:any) { setResetMsg(e.message); setQ(null) }
+  }
+  async function doReset(e: React.FormEvent) {
+    e.preventDefault()
+    setResetBusy(true); setResetMsg(null)
+    try { await resetWithSecurity(resetId, newPw, ans || undefined, pin || undefined); setResetMsg('Password reset — now sign in'); setAns(''); setPin(''); setNewPw('') } catch(err:any){ setResetMsg(err.message)} finally{ setResetBusy(false)}
   }
 
   return (
@@ -83,8 +102,21 @@ export default function Login() {
               Sign in
               <ArrowRight className="size-4" aria-hidden />
             </Button>
-          </form>
+            <button type="button" onClick={()=>{setResetId(identifier); setResetOpen(true)}} className="mt-3 flex items-center gap-1 text-xs text-ink-3 hover:text-accent"><KeyRound className="size-3"/> Forgot password? Reset with security question / PIN</button>
+           </form>
         </div>
+        <Dialog open={resetOpen} onClose={()=>setResetOpen(false)} title="Reset password (student self-service, hashed)">
+          <form onSubmit={doReset} className="space-y-3 pt-2">
+            <Input placeholder="Matric / Email / Username" value={resetId} onChange={e=>setResetId(e.target.value)} required />
+            <Button type="button" variant="outline" onClick={fetchQuestion} className="w-full">Fetch my security question</Button>
+            {q && <p className="rounded bg-amber-50 p-2 text-sm text-amber-900">Q: {q}</p>}
+            <Input placeholder="Answer (if you have question)" value={ans} onChange={e=>setAns(e.target.value)} />
+            <Input placeholder="Or Emergency PIN (4-6 digits)" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,''))} maxLength={6} />
+            <Input placeholder="New password" type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} required />
+            <Button type="submit" loading={resetBusy} className="w-full">Reset password</Button>
+            {resetMsg && <p className="text-sm text-ink-2">{resetMsg}</p>}
+          </form>
+        </Dialog>
 
         <div className="mt-6 border-t border-dashed border-rule pt-4 text-center font-mono-label text-ink-3">
           <p className="text-[0.7rem] font-semibold tracking-[0.08em] text-ink-2">UNIVERSITY OF LAGOS</p>

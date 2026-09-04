@@ -117,6 +117,18 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_user ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_hash ON refresh_tokens(token_hash);
+
+CREATE TABLE IF NOT EXISTS class_blocks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_id   INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    student_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    blocked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reason     TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(class_id, student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_block_class ON class_blocks(class_id);
+CREATE INDEX IF NOT EXISTS idx_block_student ON class_blocks(student_id);
 """
 
 
@@ -185,6 +197,9 @@ class DatabaseManager:
                 ("users", "department", "TEXT"),
                 ("students", "faculty", "VARCHAR(100)"),
                 ("classes", "department", "TEXT"),
+                ("users", "security_question", "TEXT"),
+                ("users", "security_answer_hash", "TEXT"),
+                ("users", "emergency_pin_hash", "TEXT"),
             ]:
                 try:
                     self._conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
@@ -957,3 +972,91 @@ class DatabaseManager:
     def delete_department(self, id: int):
         with self._conn:
             self._conn.execute("DELETE FROM departments WHERE id = ?", (id,))
+
+    # ------------------------------------------------------------------ #
+    #  Class blocks (lecturer-controlled)                                  #
+    # ------------------------------------------------------------------ #
+
+    def block_student(self, class_id: int, student_id: int, blocked_by: int, reason: str = None) -> bool:
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO class_blocks (class_id, student_id, blocked_by, reason) VALUES (?, ?, ?, ?)",
+                    (class_id, student_id, blocked_by, reason),
+                )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def unblock_student(self, class_id: int, student_id: int) -> bool:
+        with self._conn:
+            cur = self._conn.execute("DELETE FROM class_blocks WHERE class_id = ? AND student_id = ?", (class_id, student_id))
+            return cur.rowcount > 0
+
+    def is_blocked(self, class_id: int, student_id: int) -> bool:
+        row = self._conn.execute("SELECT id FROM class_blocks WHERE class_id = ? AND student_id = ?", (class_id, student_id)).fetchone()
+        return row is not None
+
+    def get_blocked(self, class_id: int) -> list:
+        rows = self._conn.execute(
+            """SELECT b.*, u.full_name, u.student_id AS matric, ub.full_name AS blocked_by_name
+               FROM class_blocks b JOIN users u ON b.student_id=u.id
+               LEFT JOIN users ub ON b.blocked_by=ub.id WHERE b.class_id=? ORDER BY b.created_at DESC""",
+            (class_id,)
+        ).fetchall()
+        return self._rows_to_list(rows)
+
+    # ------------------------------------------------------------------ #
+    #  Lecturer assignment                                                 #
+    # ------------------------------------------------------------------ #
+
+    def assign_lecturer(self, class_id: int, lecturer_id: int) -> bool:
+        with self._conn:
+            self._conn.execute("UPDATE classes SET lecturer_id=? WHERE id=?", (lecturer_id, class_id))
+        return True
+
+    def get_unassigned_classes(self) -> list:
+        rows = self._conn.execute("SELECT * FROM classes WHERE lecturer_id IS NULL ORDER BY code").fetchall()
+        return self._rows_to_list(rows)
+
+    # ------------------------------------------------------------------ #
+    #  Security Q / emergency PIN (hashed, admin-opaque)                    #
+    # ------------------------------------------------------------------ #
+
+    def set_security(self, user_id: int, question: str, answer: str, pin: str) -> bool:
+        # Hash both with random salt via _hash
+        answer_hash = _hash(answer.strip().lower()) if answer else None
+        pin_hash = _hash(pin.strip()) if pin else None
+        q = question.strip() if question else None
+        with self._conn:
+            self._conn.execute(
+                "UPDATE users SET security_question=?, security_answer_hash=?, emergency_pin_hash=? WHERE id=?",
+                (q, answer_hash, pin_hash, user_id),
+            )
+        return True
+
+    def has_security(self, user_id: int) -> bool:
+        row = self._conn.execute("SELECT security_question, security_answer_hash, emergency_pin_hash FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            return False
+        return bool(row["security_question"] or row["emergency_pin_hash"])
+
+    def verify_security(self, identifier: str, answer: str = None, pin: str = None) -> dict | None:
+        row = self._conn.execute("SELECT * FROM users WHERE username=? OR student_id=? OR email=?", (identifier, identifier, identifier)).fetchone()
+        if not row:
+            return None
+        # Check answer or pin (either suffices)
+        if answer and row["security_answer_hash"]:
+            if _verify(answer.strip().lower(), row["security_answer_hash"]):
+                return self._row_to_dict(row)
+        if pin and row["emergency_pin_hash"]:
+            if _verify(pin.strip(), row["emergency_pin_hash"]):
+                return self._row_to_dict(row)
+        return None
+
+    def reset_password_via_security(self, identifier: str, new_password: str, answer: str = None, pin: str = None) -> bool:
+        user = self.verify_security(identifier, answer, pin)
+        if not user:
+            return False
+        self.update_password(user["id"], new_password)
+        return True
