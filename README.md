@@ -52,13 +52,7 @@ Open http://127.0.0.1:5173. Sign in with the default admin account (username: `a
 
 ```bash
 ./build.sh            # Build frontend/dist
-python main_web.py    # Opens in a native window
-```
-
-### Legacy Tkinter GUI
-
-```bash
-python main.py
+python main.py        # Opens in a native window (or main_web.py)
 ```
 
 ---
@@ -178,13 +172,12 @@ facialrecognitionsystem/
 │
 ├── core/                   # Backend logic
 │   ├── config.py           # Config singleton
-│   ├── database.py         # SQLite layer
-│   ├── backend.py          # FastAPI app + camera streaming
+│   ├── database.py         # SQLite layer (PBKDF2, JWT store, class blocks)
+│   ├── backend.py          # FastAPI + JWT + RBAC + camera streaming
+│   ├── auth.py             # JWT helpers
 │   ├── face_detector.py    # Haar/DNN face detection
 │   ├── face_encoder.py     # dlib 128-D / LBPH encoding
-│   ├── recognizer.py       # Recognition engine
-│   ├── data_collector.py   # Training data capture
-│   └── attendance.py       # CSV attendance export
+│   └── recognizer.py       # Recognition engine
 │
 ├── frontend/               # React + TypeScript + Vite
 │   └── src/

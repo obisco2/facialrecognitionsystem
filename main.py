@@ -1,17 +1,7 @@
 """
 AttendIQ — Facial Recognition Attendance System
-================================================
-A bias-aware, multi-role attendance system powered by dlib face recognition.
-
-Roles:
-  admin     — user management, system config, bias evaluation
-  lecturer  — class management, live attendance, export
-  student   — view own attendance, self-enrol face
-
-Usage:
-    python main.py              # Launch AttendIQ (multi-role UI)
-    python main.py --evaluate   # Run bias evaluation in CLI mode
-    python main.py --legacy     # Launch the original single-panel GUI
+Single entry-point for desktop (pywebview) and bias CLI.
+Frontend (React) is the sole UI — run `build.sh` then `python main.py`.
 """
 
 import argparse
@@ -20,32 +10,6 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(__file__))
-
-
-def launch_app():
-    """Launch the full multi-role AttendIQ application."""
-    from gui.app import main
-    main()
-
-
-def launch_legacy():
-    """Launch the original single-window GUI (kept for reference)."""
-    logging.warning(
-        "Legacy GUI launched. This interface is superseded by AttendIQ."
-    )
-    # Import the original app — it still lives in its original form
-    # but is now archived; kept for demo / fallback purposes only.
-    try:
-        # The original FaceRecognitionApp is no longer the default app.py,
-        # so we replicate the minimal bootstrap here.
-        from core.config   import Config
-        from core.face_detector import FaceDetector
-        from core.face_encoder  import FaceEncoder
-        from core.recognizer    import Recognizer
-        from core.attendance    import AttendanceManager
-        print("Legacy GUI not available after refactor. Run without --legacy.")
-    except Exception as e:
-        print(f"Legacy GUI error: {e}")
 
 
 def run_bias_evaluation():
@@ -116,67 +80,30 @@ def run_bias_evaluation():
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="AttendIQ — Facial Recognition Attendance System",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "--evaluate", action="store_true",
-        help="Run bias evaluation (CLI mode)"
-    )
-    parser.add_argument(
-        "--legacy", action="store_true",
-        help="Launch legacy single-panel GUI"
-    )
-    parser.add_argument(
-        "--tkinter", action="store_true",
-        help="Launch the original Tkinter GUI instead of the Web UI"
-    )
-    parser.add_argument(
-        "--debug", action="store_true",
-        help="Enable DEBUG logging"
-    )
+    parser = argparse.ArgumentParser(description="AttendIQ — Facial Recognition Attendance System")
+    parser.add_argument("--evaluate", action="store_true", help="Run bias evaluation (CLI mode)")
+    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("face_recog.log", encoding="utf-8"),
-        ],
+        handlers=[logging.StreamHandler(), logging.FileHandler("face_recog.log", encoding="utf-8")],
     )
 
     if args.evaluate:
         run_bias_evaluation()
-    elif args.legacy:
-        launch_legacy()
-    elif args.tkinter:
-        launch_app()
-    else:
-        # Launch Web UI
-        from main_web import find_free_port, start_backend, on_closing
-        import threading
-        import time
-        import webview
-        
-        port = find_free_port()
-        server_thread = threading.Thread(target=start_backend, args=(port,), daemon=True)
-        server_thread.start()
-        time.sleep(0.5)
-
-        window = webview.create_window(
-            title="AttendIQ — Facial Recognition Attendance System",
-            url=f"http://127.0.0.1:{port}",
-            width=1400,
-            height=850,
-            min_size=(1200, 700),
-            background_color="#0f0f1a"
-        )
-        window.events.closing += on_closing
-        webview.start(debug=True)
+        return
+    # Launch Web UI (pywebview desktop shell)
+    from main_web import find_free_port, start_backend, on_closing
+    import threading, time, webview
+    port = find_free_port()
+    threading.Thread(target=start_backend, args=(port,), daemon=True).start()
+    time.sleep(0.5)
+    window = webview.create_window(title="AttendIQ — Facial Recognition Attendance System", url=f"http://127.0.0.1:{port}", width=1400, height=850, min_size=(1200, 700), background_color="#0f0f1a")
+    window.events.closing += on_closing
+    webview.start(debug=True)
 
 
 if __name__ == "__main__":

@@ -1602,10 +1602,9 @@ def delete_department(id: int, current_user=Depends(require_roles("admin"))):
 # Mount the data folder for captured thumbnails
 app.mount("/data", StaticFiles(directory=os.path.join(config.base_dir, "data")), name="data")
 
-# Mount the built frontend if present (frontend/dist), else fall back to the
-# legacy static web/ folder — lets `./build.sh` cut over without code changes.
+# Serve the React build — run `build.sh` / `bun --cwd frontend run build` first
 project_root = os.path.dirname(os.path.dirname(__file__))
 frontend_dist = os.path.join(project_root, "frontend", "dist")
-web_dir = frontend_dist if os.path.isdir(frontend_dist) else os.path.join(project_root, "web")
-os.makedirs(web_dir, exist_ok=True)
-app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
+if not os.path.isdir(frontend_dist):
+    raise RuntimeError("frontend/dist missing — run build.sh or `bun --cwd frontend run build`")
+app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="web")
