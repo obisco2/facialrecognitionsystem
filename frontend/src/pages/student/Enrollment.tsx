@@ -34,6 +34,8 @@ export default function StudentEnrollment() {
   const [busy, setBusy] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [cameraActive, setCameraActive] = useState(false)
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
 
   // Liveness validation states
   const [livenessOpen, setLivenessOpen] = useState(false)
@@ -44,13 +46,38 @@ export default function StudentEnrollment() {
 
   if (!user) return null
 
-  // Start browser camera
-  const startCamera = useCallback(async () => {
-    setCameraError(null)
+  // Enumerate camera devices
+  const enumerateCameras = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'user' },
-      })
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true })
+      tmp.getTracks().forEach(t => t.stop())
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const cams = devices.filter(d => d.kind === 'videoinput')
+      setCameraDevices(cams)
+      if (cams.length && !selectedDeviceId) setSelectedDeviceId(cams[0].deviceId)
+    } catch { /* permission denied */ }
+  }, [selectedDeviceId])
+
+  useEffect(() => {
+    enumerateCameras()
+    const h = () => enumerateCameras()
+    navigator.mediaDevices?.addEventListener?.('devicechange', h)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', h)
+  }, [enumerateCameras])
+
+  // Start browser camera — respects selectedDeviceId (external USB)
+  const startCamera = useCallback(async (deviceId?: string) => {
+    const targetId = deviceId ?? selectedDeviceId
+    setCameraError(null)
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+    try {
+      const constraints: MediaStreamConstraints = targetId
+        ? { video: { deviceId: { exact: targetId }, width: 640, height: 480 } }
+        : { video: { width: 640, height: 480, facingMode: 'user' } }
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
       
       const bindStream = async () => {
@@ -82,7 +109,7 @@ export default function StudentEnrollment() {
       setCameraError(err instanceof Error ? err.message : 'Camera access denied')
       setCameraActive(false)
     }
-  }, [])
+  }, [selectedDeviceId])
 
   // Stop browser camera
   const stopCamera = useCallback(() => {
@@ -394,6 +421,20 @@ export default function StudentEnrollment() {
         </div>
       ) : (
         <div className="flex flex-1 flex-col gap-4 overflow-hidden rounded-[var(--radius-lg)] bg-graphite p-4">
+          {cameraDevices.length > 1 && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-graphite-ink-2">Camera source:</label>
+              <select
+                value={selectedDeviceId}
+                onChange={(e) => { setSelectedDeviceId(e.target.value); startCamera(e.target.value) }}
+                className="h-8 rounded border border-graphite-rule bg-graphite-2 px-2 text-sm text-ink"
+              >
+                {cameraDevices.map(d => (
+                  <option key={d.deviceId} value={d.deviceId}>{d.label || `Camera ${d.deviceId.slice(0,6)}`}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {/* Camera feed */}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-[var(--radius-md)] border border-graphite-rule bg-black">
             <video

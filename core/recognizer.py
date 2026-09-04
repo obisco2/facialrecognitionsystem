@@ -51,13 +51,24 @@ class Recognizer:
         return len(encs)
 
     def start_camera(self, camera_index=0):
-        """Open the webcam."""
-        self.camera = cv2.VideoCapture(camera_index)
+        """Open the webcam. Handles Windows DirectShow and RTSP/HTTP strings."""
+        import sys
+        # Use DirectShow on Windows for external USB cameras
+        api_pref = cv2.CAP_DSHOW if sys.platform == "win32" and isinstance(camera_index, int) else 0
+        try:
+            self.camera = cv2.VideoCapture(camera_index, api_pref) if api_pref else cv2.VideoCapture(camera_index)
+        except Exception:
+            self.camera = cv2.VideoCapture(camera_index)
         if not self.camera.isOpened():
-            logger.error("Cannot open camera %d", camera_index)
-            return False
+            # Fallback without API pref (Linux/Mac or string URLs like RTSP)
+            if api_pref:
+                self.camera = cv2.VideoCapture(camera_index)
+            if not self.camera.isOpened():
+                logger.error("Cannot open camera %s", camera_index)
+                return False
+        # Warm-up and verify we can read a frame
         self.camera_running = True
-        logger.info("Camera %d opened", camera_index)
+        logger.info("Camera %s opened", camera_index)
         return True
 
     def stop_camera(self):
@@ -121,9 +132,14 @@ class Recognizer:
 
     def run_once(self, camera_index=0, scale=0.25):
         """Single-frame capture and recognition."""
-        cap = cv2.VideoCapture(camera_index)
+        import sys
+        api_pref = cv2.CAP_DSHOW if sys.platform == "win32" and isinstance(camera_index, int) else 0
+        cap = cv2.VideoCapture(camera_index, api_pref) if api_pref else cv2.VideoCapture(camera_index)
         if not cap.isOpened():
-            return None
+            if api_pref:
+                cap = cv2.VideoCapture(camera_index)
+            if not cap.isOpened():
+                return None
 
         ret, frame = cap.read()
         cap.release()

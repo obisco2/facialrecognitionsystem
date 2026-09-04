@@ -28,6 +28,8 @@ export default function LiveSession() {
   const [cameraActive, setCameraActive] = useState(false)
   const [faces, setFaces] = useState<RecognizeResult[]>([])
   const [videoDims, setVideoDims] = useState({ width: 640, height: 480 })
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
 
   const [startTime, setStartTime] = useState<number | null>(null)
   const [sessionTime, setSessionTime] = useState('')
@@ -104,13 +106,44 @@ export default function LiveSession() {
     return live?.marked.some((m) => m.name === s.full_name) ?? false
   }
 
-  // Start browser camera
-  const startCamera = useCallback(async () => {
-    setCameraError(null)
+  // Enumerate camera devices
+  const enumerateCameras = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'user' },
-      })
+      // Request permission first so device labels are available
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true })
+      tmp.getTracks().forEach(t => t.stop())
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const cams = devices.filter(d => d.kind === 'videoinput')
+      setCameraDevices(cams)
+      if (cams.length && !selectedDeviceId) {
+        setSelectedDeviceId(cams[0].deviceId)
+      }
+    } catch {
+      // Permission denied — keep empty list, fallback to facingMode
+    }
+  }, [selectedDeviceId])
+
+  useEffect(() => {
+    enumerateCameras()
+    const handler = () => enumerateCameras()
+    navigator.mediaDevices?.addEventListener?.('devicechange', handler)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', handler)
+  }, [enumerateCameras])
+
+  // Start browser camera
+  const startCamera = useCallback(async (deviceId?: string) => {
+    setCameraError(null)
+    const targetId = deviceId ?? selectedDeviceId
+    // Stop existing stream before switching
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop())
+      streamRef.current = null
+    }
+    try {
+      const constraints: MediaStreamConstraints = targetId
+        ? { video: { deviceId: { exact: targetId }, width: 640, height: 480 } }
+        : { video: { width: 640, height: 480, facingMode: 'user' } }
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -121,7 +154,14 @@ export default function LiveSession() {
       setCameraError(err instanceof Error ? err.message : 'Camera access denied')
       setCameraActive(false)
     }
-  }, [])
+  }, [selectedDeviceId])
+
+  // Switch camera when device selection changes while active
+  useEffect(() => {
+    if (running && cameraActive && selectedDeviceId) {
+      startCamera(selectedDeviceId)
+    }
+  }, [selectedDeviceId])
 
   // Stop browser camera
   const stopCamera = useCallback(() => {
@@ -237,14 +277,43 @@ export default function LiveSession() {
                   </option>
                 ))}
               </select>
+              {cameraDevices.length > 1 && (
+                <select
+                  value={selectedDeviceId}
+                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  className="h-10 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                  title="Camera source — pick external USB camera if plugged in"
+                >
+                  {cameraDevices.map(d => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || `Camera ${d.deviceId.slice(0,6)}`}
+                    </option>
+                  ))}
+                </select>
+              )}
               <Button onClick={handleStart} disabled={!classId} loading={starting}>
                 <Play className="size-4" /> Start session
               </Button>
             </>
           ) : (
-            <Button variant="danger" onClick={handleStop}>
-              <Square className="size-4" /> Stop session
-            </Button>
+            <>
+              {cameraDevices.length > 1 && !live?.camera_active && (
+                <select
+                  value={selectedDeviceId}
+                  onChange={(e) => setSelectedDeviceId(e.target.value)}
+                  className="h-10 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                >
+                  {cameraDevices.map(d => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label || `Camera ${d.deviceId.slice(0,6)}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <Button variant="danger" onClick={handleStop}>
+                <Square className="size-4" /> Stop session
+              </Button>
+            </>
           )}
           {running && (
             <Badge variant={live?.running ? 'success' : 'neutral'} dot>

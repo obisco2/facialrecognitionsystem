@@ -47,6 +47,8 @@ _request_counts: dict[str, list[float]] = defaultdict(list)
 _login_counts: dict[str, list[float]] = defaultdict(list)
 
 
+_RATE_LIMIT_BYPASS = {"/api/recognize/frame", "/api/session/live", "/api/session/video_feed"}
+
 def _check_rate_limit(ip: str, limit: int = _RATE_LIMIT_MAX_REQUESTS) -> bool:
     """Return True if request is allowed, False if rate limited."""
     now = time.time()
@@ -60,7 +62,7 @@ def _check_rate_limit(ip: str, limit: int = _RATE_LIMIT_MAX_REQUESTS) -> bool:
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """Apply rate limiting to all API endpoints."""
+    """Apply rate limiting to all API endpoints. High-frequency video endpoints are exempt."""
     ip = request.client.host if request.client else "unknown"
     path = request.url.path
 
@@ -76,6 +78,10 @@ async def rate_limit_middleware(request: Request, call_next):
                 media_type="application/json",
             )
         _login_counts[ip].append(now)
+
+    # Exempt real-time video/recognition polling (would otherwise block multi-face at 40+ req/min)
+    if path in _RATE_LIMIT_BYPASS:
+        return await call_next(request)
 
     if not _check_rate_limit(ip):
         return Response(
@@ -195,11 +201,21 @@ class CameraStreamer:
             if not opened:
                 logger.warning("Failed to open camera. Running in client-side camera mode.")
         else:
-            # Enrollment capture
-            self.camera = cv2.VideoCapture(source)
+            # Enrollment capture — use CAP_DSHOW on Windows for external USB cameras
+            import sys
+            try:
+                if isinstance(source, int) and sys.platform == "win32":
+                    self.camera = cv2.VideoCapture(source, cv2.CAP_DSHOW)
+                    if not self.camera.isOpened():
+                        # Fallback without CAP_DSHOW
+                        self.camera = cv2.VideoCapture(source)
+                else:
+                    self.camera = cv2.VideoCapture(source)
+            except Exception:
+                self.camera = cv2.VideoCapture(source)
             self.camera_available = self.camera.isOpened()
             if not self.camera_available:
-                logger.warning("Failed to open camera for enrollment. Running in client-side camera mode.")
+                logger.warning("Failed to open camera %s for enrollment. Running in client-side camera mode.", source)
                 self.camera = None
 
         # Start thread
@@ -553,13 +569,36 @@ def log_manual_attendance(req: ManualAttendanceRequest):
         raise HTTPException(status_code=400, detail="Student already logged today")
     return {"status": "ok"}
 
+# --- Camera diagnostics ---
+
+@app.get("/api/camera/list")
+def list_cameras(max_index: int = 4):
+    """Probe camera indices 0..max_index and report which are openable."""
+    import sys
+    results = []
+    for idx in range(max_index + 1):
+        try:
+            api_pref = cv2.CAP_DSHOW if sys.platform == "win32" else 0
+            cap = cv2.VideoCapture(idx, api_pref) if api_pref else cv2.VideoCapture(idx)
+            opened = cap.isOpened()
+            if opened:
+                # Try to read a frame to confirm it's not a phantom device
+                ret, _ = cap.read()
+                opened = opened and ret
+            cap.release()
+            results.append({"index": idx, "available": bool(opened)})
+        except Exception as e:
+            results.append({"index": idx, "available": False, "error": str(e)})
+    return {"cameras": results}
+
 # --- Camera Streaming & Live Session Endpoints ---
 
 @app.post("/api/session/start")
 def start_session(class_id: int, lecturer_id: int, camera_source: Optional[str] = None):
     try:
         streamer.start("attendance", class_id=class_id, lecturer_id=lecturer_id, camera_source=camera_source)
-        return {"status": "ok"}
+        # Return camera availability so frontend can show immediate error
+        return {"status": "ok", "camera_active": getattr(streamer, "camera_available", False)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -628,14 +667,14 @@ def recognize_frame(req: RecognizeFrameRequest):
     scale = config.frame_scale
     locations, names, distances = recognizer.process_frame(frame, scale)
 
-    # Build results
+    # Build results — handle ALL faces in frame (multi-face support)
     recognized = []
-    for (top, right, bottom, left), name, dist in zip(locations, names, distances):
-        # Laplacian variance check on the cropped face region
+    for (top_s, right_s, bottom_s, left_s), name, dist in zip(locations, names, distances):
+        # locations are in scaled-down coordinates — convert to original frame coords
+        top, right, bottom, left = int(top_s / scale), int(right_s / scale), int(bottom_s / scale), int(left_s / scale)
         h, w = frame.shape[:2]
-        t_scaled, r_scaled, b_scaled, l_scaled = int(top), int(right), int(bottom), int(left)
-        y1, y2 = max(0, t_scaled), min(h, b_scaled)
-        x1, x2 = max(0, l_scaled), min(w, r_scaled)
+        y1, y2 = max(0, top), min(h, bottom)
+        x1, x2 = max(0, left), min(w, right)
         face_img = frame[y1:y2, x1:x2]
         
         is_live = True
@@ -655,10 +694,10 @@ def recognize_frame(req: RecognizeFrameRequest):
             "is_live": is_live,
             "liveness_score": liveness_score,
             "box": {
-                "top": int(top / scale),
-                "right": int(right / scale),
-                "bottom": int(bottom / scale),
-                "left": int(left / scale),
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "left": left,
             },
         })
 
@@ -706,7 +745,7 @@ def start_enrollment(user_id: int, full_name: str, camera_source: Optional[str] 
         streamer.start("enrollment", user_id=user_id, full_name=full_name, camera_source=camera_source)
         temp_dir = os.path.join(config.known_faces_dir, f"__temp_{user_id}__")
         os.makedirs(temp_dir, exist_ok=True)
-        return {"status": "ok"}
+        return {"status": "ok", "camera_active": getattr(streamer, "camera_available", False)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

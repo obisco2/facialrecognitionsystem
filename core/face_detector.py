@@ -95,10 +95,13 @@ class FaceDetector:
         return self._detect_haar(image)
 
     def _detect_haar(self, image):
-        """Detect faces using Haar Cascade."""
+        """Detect faces using Haar Cascade. Tuned for multi-face classroom scenes."""
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Lower minNeighbors + smaller scaleFactor = higher recall for 2+ faces
+        # Use equalizeHist to improve detection under variable classroom lighting
+        gray = cv2.equalizeHist(gray)
         faces = self._haar_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+            gray, scaleFactor=1.08, minNeighbors=4, minSize=(28, 28), flags=cv2.CASCADE_SCALE_IMAGE
         )
         results = []
         for (x, y, w, h) in faces:
