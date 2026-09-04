@@ -133,12 +133,8 @@ CREATE INDEX IF NOT EXISTS idx_block_student ON class_blocks(student_id);
 
 
 def _hash(password: str, salt: str = None) -> str:
-    """
-    Hash a password using PBKDF2-SHA256 with a random salt.
-
-    Returns:
-        "salt:digest" string for storage.
-    """
+    # PBKDF2-SHA256, 260k rounds — OWASP 2023. Salt is hex, stored as salt:digest.
+    # Tobi: keep verify compatible with old bare sha256 hashes from early prototype.
     if salt is None:
         salt = secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac(

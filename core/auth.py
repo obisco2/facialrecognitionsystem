@@ -1,6 +1,7 @@
 """
-JWT Authentication for AttendIQ.
-Access token (15m) + Refresh token (7d) with hashed storage and RBAC helpers.
+AttendIQ auth — Tobi, Aug 2025.
+15m access + 7d refresh, jti + sha256 in DB, simple RBAC.
+Kept self-hosted so desktop pywebview still works without Supabase.
 """
 import hashlib
 import secrets
@@ -17,7 +18,7 @@ from core.config import Config
 logger = logging.getLogger(__name__)
 config = Config()
 
-# Re-use DB lazily to avoid circular import at module load
+# lazy DB access — avoid circular import when backend hasn't loaded yet
 def _db():
     from core.database import DatabaseManager
     # Use singleton db instance from backend if available
