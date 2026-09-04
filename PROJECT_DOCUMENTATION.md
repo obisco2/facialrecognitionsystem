@@ -88,20 +88,20 @@ Buolamwini and Gebru (2018) showed that commercial face recognition systems have
 ### 5.2 Module Dependency Graph
 
 ```
-main_web.py (pywebview desktop shell)
-  └── core.backend (FastAPI app)
+main.py / main_web.py (pywebview desktop + --evaluate CLI)
+  └── core.backend (FastAPI + JWT + RBAC + camera streaming)
         ├── core.config (Config singleton)
-        ├── core.database (SQLite layer)
+        ├── core.database (SQLite + refresh_tokens + class_blocks)
+        ├── core.auth (JWT HS256 15m/7d, require_roles)
         ├── core.recognizer
-        │     ├── core.face_detector (Haar/DNN)
-        │     └── core.face_encoder (dlib/LBPH)
-        ├── core.attendance (CSV export)
+        │     ├── core.face_detector (Haar/DNN, equalizeHist, multi-face)
+        │     └── core.face_encoder (dlib/LBPH fallback)
         └── bias.evaluator
               └── bias.datasets
 
-frontend/ (React + TypeScript + Vite)
+frontend/ (React 19 + TypeScript + Vite + Tailwind v4)
   └── src/pages/{admin,lecturer,student}/*.tsx
-        └── src/lib/api.ts → fetches /api/*
+        └── src/lib/api.ts → fetches /api/* (Bearer, auto-refresh)
 ```
 
 ### 5.3 Data Flow
@@ -141,18 +141,17 @@ Fallback: POST /api/session/start → GET /api/camera/list probe → GET /api/se
 
 | Component | Lines | Purpose |
 |-----------|-------|---------|
-| `core/config.py` | 132 | Configuration management |
-| `core/face_detector.py` | 176 | Face detection (Haar/DNN, equalizeHist, multi-face tuned) |
+| `core/config.py` | 163 | Config singleton + JWT secrets |
+| `core/auth.py` | 209 | JWT (HS256 15m/7d, jti+sha256) + RBAC helpers |
+| `core/face_detector.py` | 176 | Face detection (Haar/DNN, equalizeHist, multi-face) |
 | `core/face_encoder.py` | 415 | Face encoding and matching |
-| `core/data_collector.py` | 138 | Training data capture |
 | `core/recognizer.py` | 159 | Recognition engine (CAP_DSHOW, multi-face) |
-| `core/database.py` | 609 | SQLite database layer |
-| `core/backend.py` | ~1369 | FastAPI backend + frame recognition + camera discovery + rate-limit bypass |
-| `core/attendance.py` | 129 | Attendance CSV management |
+| `core/database.py` | ~1060 | SQLite + refresh_tokens + class_blocks + security Q/PIN |
+| `core/backend.py` | ~1610 | FastAPI + JWT + RBAC + blocks + camera discovery + security headers |
 | `bias/evaluator.py` | 244 | Bias evaluation metrics |
 | `bias/datasets.py` | 106 | Dataset helpers |
-| **Total (Python)** | **~3,000** | |
-| **Total (TypeScript)** | **~3,200** | React frontend (browser camera) |
+| **Total (Python)** | **~3,950** | |
+| **Total (TypeScript)** | **~3,400** | React frontend (JWT, blocks, device selector) |
 
 ### 6.3 Key Algorithms
 
@@ -430,58 +429,51 @@ pytest tests/ -v --cov=core --cov=bias --cov-report=term-missing
 
 See `config.ini` for all configurable parameters.
 
-### Appendix C: File Listing
+### Appendix C: File Listing (Supervisor-Clean, post-cleanup)
 
 ```
 facialrecognitionsystem/
-├── main.py                     # Legacy Tkinter entry point
-├── main_web.py                 # Desktop shell (pywebview)
-├── config.ini                  # Configuration file
-├── requirements.txt            # Python dependencies
-├── pyproject.toml              # Pytest configuration
-├── setup.sh / setup.ps1        # Installer scripts
-├── dev.sh / dev.ps1            # Dev servers launcher
-├── build.sh / build.ps1        # Frontend build scripts
-├── Dockerfile                  # Container build definition
-├── docker-compose.yml          # Container orchestration
-├── .env.example                # Environment variable template
-├── LICENSE                     # MIT License
-├── PROJECT_DOCUMENTATION.md    # This file
-├── README.md                   # Project readme
+├── main.py                     # Desktop entry (pywebview) + --evaluate CLI
+├── main_web.py                 # pywebview shell (find_free_port + streamer)
+├── config.ini                  # INI config (includes [Security] jwt secrets)
+├── requirements.txt            # Python deps (PyJWT, cryptography, FastAPI, opencv)
+├── pyproject.toml              # Pytest config
+├── setup.sh / setup.ps1        # One-command bootstrap
+├── dev.sh / dev.ps1            # Run backend + frontend
+├── build.sh / build.ps1        # Build frontend/dist
+├── Dockerfile                  # Container build
+├── docker-compose.yml          # Orchestration
+├── .env.example                # Env template (JWT secrets)
+├── PROJECT_DOCUMENTATION.md    # This file (academic submission)
+├── README.md                   # Quick start + architecture
 │
-├── core/                       # Core system logic
-│   ├── __init__.py
-│   ├── config.py               # Config loader (singleton)
-│   ├── database.py             # SQLite database layer (PBKDF2 hashing)
-│   ├── backend.py              # FastAPI REST + rate limiting + health check
-│   ├── face_detector.py        # Face detection (Haar/DNN)
-│   ├── face_encoder.py         # Face encoding (dlib/LBPH fallback)
-│   ├── data_collector.py       # Training capture helper
-│   ├── recognizer.py           # Recognition engine
-│   └── attendance.py           # Attendance CSV management
+├── core/                       # Backend (all in use)
+│   ├── config.py               # Singleton + JWT getters
+│   ├── auth.py                 # JWT HS256 + RBAC (get_current_user, require_roles)
+│   ├── database.py             # SQLite + refresh_tokens + class_blocks + security Q/PIN
+│   ├── backend.py              # FastAPI + JWT + RBAC + blocks + camera/list + security headers
+│   ├── face_detector.py        # Haar/DNN (equalizeHist, multi-face)
+│   ├── face_encoder.py         # dlib 128-D / LBPH
+│   └── recognizer.py           # Recognition engine (CAP_DSHOW)
 │
-├── frontend/                   # React + TypeScript + Vite app
-│   ├── src/                    # Components, pages, styling
-│   ├── package.json
-│   └── vite.config.ts
+├── bias/                       # Bias evaluation
+│   ├── evaluator.py
+│   └── datasets.py
 │
-├── bias/                       # Bias evaluation module
-│   ├── __init__.py
-│   ├── evaluator.py            # Accuracy metrics computer
-│   └── datasets.py             # Dataset helpers
+├── frontend/                   # React 19 + TS + Vite + Tailwind v4
+│   ├── src/pages/admin/        # Dashboard, Classes (blocks+assign), Users, Bias, Settings
+│   ├── src/pages/lecturer/     # Dashboard, Classes (blocks+unassigned), LiveSession (USB selector), History
+│   ├── src/pages/student/      # Dashboard, Enrollment (USB), Settings (security Q/PIN)
+│   ├── src/lib/api.ts          # Typed client (Bearer + auto-refresh) + blocks/security
+│   ├── src/lib/auth.tsx        # setAuth/clearTokens
+│   └── src/components/         # AppShell, ProtectedRoute, UI
 │
-├── tests/                      # Unit tests (pytest)
-│   ├── __init__.py
-│   ├── test_config.py          # Config singleton tests
-│   ├── test_database.py        # Database CRUD + auth tests
-│   ├── test_face_detector.py   # Face detection tests
-│   └── test_bias_evaluator.py  # Bias evaluation tests
+├── tests/                      # pytest
+│   ├── test_config.py
+│   ├── test_database.py
+│   ├── test_face_detector.py
+│   └── test_bias_evaluator.py
 │
-├── data/                       # Runtime data
-│   ├── known_faces/            # Enrolled student face images
-│   ├── evaluation_dataset/     # Demographic test set images
-│   ├── attendance/             # Excel/CSV exports
-│   └── users.db                # SQLite database file
-│
-└── models/                     # Saved models
+├── data/ (gitignored)          # runtime: known_faces/, attendance/, users.db, evaluation_dataset/
+└── models/                     # haarcascade XML + deploy.prototxt
 ```

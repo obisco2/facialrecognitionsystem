@@ -48,3 +48,8 @@ Thumbs.db
 *.njsproj
 *.sln
 .vercel/
+
+# Generated reference docs (user-local, not for supervisor submission)
+docs/
+scripts/generate_docs.py
+scripts/generate_fullcoverage_pdf.py
