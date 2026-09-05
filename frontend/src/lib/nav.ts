@@ -18,6 +18,7 @@ export const NAV_BY_ROLE: Record<Role, NavItem[]> = {
   lecturer: [
     { id: 'dashboard', label: 'Dashboard', to: '/lecturer', icon: 'LayoutDashboard' },
     { id: 'classes', label: 'Classes', to: '/lecturer/classes', icon: 'BookOpen' },
+    { id: 'students', label: 'Students', to: '/lecturer/students', icon: 'Users' },
     { id: 'live', label: 'Live session', to: '/lecturer/live', icon: 'Video' },
     { id: 'history', label: 'History', to: '/lecturer/history', icon: 'History' },
   ],

@@ -165,6 +165,18 @@ class Config:
     def app_name(self):
         return self.get("UI", "APP_NAME", "AttendIQ")
 
+    @property
+    def motion_timeout_seconds(self):
+        return self.getint("Hardware", "MOTION_TIMEOUT_SECONDS", 45)
+
+    @property
+    def presence_timeout_seconds(self):
+        return self.getint("Hardware", "PRESENCE_TIMEOUT_SECONDS", 60)
+
+    @property
+    def buzzer_enabled(self):
+        return self.getboolean("Hardware", "BUZZER_ENABLED", True)
+
     def set(self, section: str, key: str, value: str):
         """Persist a config value to disk."""
         if not self._config.has_section(section):

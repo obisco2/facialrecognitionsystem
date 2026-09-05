@@ -1,19 +1,53 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ScanFace, Mail, Lock, ArrowRight, KeyRound } from 'lucide-react'
+import { ScanFace, Mail, Lock, ArrowRight, KeyRound, GraduationCap, Briefcase, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog } from '@/components/ui/dialog'
 import { login, ApiError, getSecurityQuestion, resetWithSecurity } from '@/lib/api'
+import type { Role } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { cn } from '@/lib/utils'
+
+const ROLE_TABS: { role: Role; label: string; icon: React.ReactNode; idLabel: string; idPlaceholder: string; subtitle: string; activeRing: string }[] = [
+  {
+    role: 'student',
+    label: 'Student',
+    icon: <GraduationCap className="size-4" />,
+    idLabel: 'Matric No. / Email',
+    idPlaceholder: 'e.g. 200101001 or you@unilag.edu',
+    subtitle: 'Check attendance, register courses, enroll your face.',
+    activeRing: 'border-accent bg-accent-tint text-accent',
+  },
+  {
+    role: 'lecturer',
+    label: 'Lecturer',
+    icon: <Briefcase className="size-4" />,
+    idLabel: 'Staff ID / Email',
+    idPlaceholder: 'e.g. UNILAG/1234 or you@unilag.edu',
+    subtitle: 'Run live sessions, manage rosters, review history.',
+    activeRing: 'border-success-ink bg-success-tint text-success-ink',
+  },
+  {
+    role: 'admin',
+    label: 'Admin',
+    icon: <ShieldCheck className="size-4" />,
+    idLabel: 'Username / Email',
+    idPlaceholder: 'Admin username or email',
+    subtitle: 'Users, classes, bias evaluation, system settings.',
+    activeRing: 'border-warning-ink bg-warning-tint text-warning-ink',
+  },
+]
 
 export default function Login() {
+  const [tab, setTab] = useState<Role>('student')
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const { setAuth } = useAuth()
   const navigate = useNavigate()
+  const active = ROLE_TABS.find((t) => t.role === tab)!
   const [resetOpen, setResetOpen] = useState(false)
   const [resetId, setResetId] = useState('')
   const [q, setQ] = useState<string | null>(null)
@@ -29,6 +63,11 @@ export default function Login() {
     setLoading(true)
     try {
       const data = await login(identifier, password)
+      if (data.role !== tab) {
+        const want = ROLE_TABS.find((t) => t.role === data.role)?.label ?? data.role
+        setError(`This is a ${want} account — switch to the ${want} tab to sign in.`)
+        return
+      }
       setAuth(data)
       navigate(`/${data.role}`)
     } catch (err) {
@@ -58,20 +97,43 @@ export default function Login() {
           </h1>
         </div>
 
+        {/* Role tabs — distinct login screen per role */}
+        <div className="mb-4 grid grid-cols-3 gap-2" role="tablist" aria-label="Sign in as">
+          {ROLE_TABS.map((t) => (
+            <button
+              key={t.role}
+              role="tab"
+              aria-selected={tab === t.role}
+              type="button"
+              onClick={() => { setTab(t.role); setError(null) }}
+              className={cn(
+                'flex items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-rule px-2 py-2 text-sm font-semibold text-ink-3 transition-colors',
+                tab === t.role && t.activeRing,
+              )}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+
         <div className="rounded-[var(--radius-md)] border border-rule bg-paper p-6">
-          <p className="mb-5 text-sm text-ink-3">Sign in to your account</p>
+          <p className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-ink">
+            {active.icon} {active.label} sign in
+          </p>
+          <p className="mb-5 text-xs text-ink-3">{active.subtitle}</p>
 
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div>
               <label htmlFor="identifier" className="mb-1.5 block text-sm font-medium text-ink-2">
-                Staff ID / Matric No. / Email
+                {active.idLabel}
               </label>
               <Input
                 id="identifier"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 icon={<Mail />}
-                placeholder="Staff ID, Matric Number, or Email"
+                placeholder={active.idPlaceholder}
                 autoComplete="username"
                 required
               />

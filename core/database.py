@@ -566,27 +566,63 @@ class DatabaseManager:
         ).fetchone()
         return self._row_to_dict(row)
 
-    def get_classes(self, lecturer_id: int = None) -> list:
-        """Return all classes, optionally filtered by lecturer."""
+    def get_classes(self, lecturer_id: int = None, department: str = None, faculty_id: int = None) -> list:
+        """Return all classes, optionally filtered by lecturer / department / faculty."""
+        clauses, params = [], []
         if lecturer_id:
-            rows = self._conn.execute(
-                """SELECT c.*, u.full_name AS lecturer_name,
-                          (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS enrolled_count
-                   FROM classes c
-                   LEFT JOIN users u ON c.lecturer_id = u.id
-                   WHERE c.lecturer_id = ?
-                   ORDER BY c.code""",
-                (lecturer_id,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                """SELECT c.*, u.full_name AS lecturer_name,
-                          (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS enrolled_count
-                   FROM classes c
-                   LEFT JOIN users u ON c.lecturer_id = u.id
-                   ORDER BY c.code""",
-            ).fetchall()
+            clauses.append("c.lecturer_id = ?")
+            params.append(lecturer_id)
+        if department:
+            clauses.append("c.department = ?")
+            params.append(department)
+        if faculty_id:
+            clauses.append("d.faculty_id = ?")
+            params.append(faculty_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"""SELECT c.*, u.full_name AS lecturer_name,
+                       f.name AS faculty_name,
+                       (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS enrolled_count
+                FROM classes c
+                LEFT JOIN users u ON c.lecturer_id = u.id
+                LEFT JOIN departments d ON d.name = c.department
+                LEFT JOIN faculties f ON f.id = d.faculty_id
+                {where}
+                ORDER BY c.code""",
+            tuple(params),
+        ).fetchall()
         return self._rows_to_list(rows)
+
+    def get_browse_classes(self, student_id: int, department: str = None, faculty_id: int = None) -> list:
+        """All classes with per-student enrolled flag, for course registration."""
+        clauses, params = [], []
+        if department:
+            clauses.append("c.department = ?")
+            params.append(department)
+        if faculty_id:
+            clauses.append("d.faculty_id = ?")
+            params.append(faculty_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        # NOTE: student_id placeholder comes first (SELECT clause precedes WHERE)
+        params = [student_id, *params]
+        rows = self._conn.execute(
+            f"""SELECT c.*, u.full_name AS lecturer_name,
+                       f.name AS faculty_name,
+                       (SELECT COUNT(*) FROM enrollments WHERE class_id = c.id) AS enrolled_count,
+                       EXISTS(SELECT 1 FROM enrollments WHERE class_id = c.id AND student_id = ?) AS is_enrolled
+                FROM classes c
+                LEFT JOIN users u ON c.lecturer_id = u.id
+                LEFT JOIN departments d ON d.name = c.department
+                LEFT JOIN faculties f ON f.id = d.faculty_id
+                {where}
+                ORDER BY c.code""",
+            tuple(params),
+        ).fetchall()
+        out = []
+        for r in self._rows_to_list(rows):
+            r["is_enrolled"] = bool(r.pop("is_enrolled"))
+            out.append(r)
+        return out
 
     def update_class(self, class_id: int, **fields) -> bool:
         allowed = {"name", "code", "lecturer_id", "schedule", "room", "department"}
@@ -652,6 +688,40 @@ class DatabaseManager:
             (student_id,),
         ).fetchall()
         return self._rows_to_list(rows)
+
+    def get_roster(self, lecturer_id: int = None) -> list:
+        """Students with the courses they take. Scoped to a lecturer's
+        classes when lecturer_id is given, otherwise the whole school."""
+        clauses, params = ["u.role = 'student'"], []
+        if lecturer_id:
+            clauses.append("c.lecturer_id = ?")
+            params.append(lecturer_id)
+        where = f"WHERE {' AND '.join(clauses)}"
+        rows = self._conn.execute(
+            f"""SELECT u.id, u.full_name, u.student_id, u.email, u.department,
+                       u.face_enrolled, c.id AS cid, c.code AS ccode, c.name AS cname
+                FROM users u
+                JOIN enrollments e ON e.student_id = u.id
+                JOIN classes c ON c.id = e.class_id
+                {where}
+                ORDER BY u.full_name, c.code""",
+            tuple(params),
+        ).fetchall()
+        grouped: dict = {}
+        for r in rows:
+            sid = r["id"]
+            if sid not in grouped:
+                grouped[sid] = {
+                    "id": sid,
+                    "full_name": r["full_name"],
+                    "student_id": r["student_id"],
+                    "email": r["email"],
+                    "department": r["department"],
+                    "face_enrolled": r["face_enrolled"],
+                    "classes": [],
+                }
+            grouped[sid]["classes"].append({"id": r["cid"], "code": r["ccode"], "name": r["cname"]})
+        return list(grouped.values())
 
     def is_enrolled(self, student_id: int, class_id: int) -> bool:
         row = self._conn.execute(

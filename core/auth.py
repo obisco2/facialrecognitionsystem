@@ -195,6 +195,38 @@ def get_current_user(
     return user
 
 
+def authenticate_media_request(
+    request: Request,
+    token: Optional[str] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = None,
+):
+    """Auth for <img>/<video> tags which can't set Authorization headers.
+
+    Accepts (in order): Authorization header, access_token cookie,
+    ?token= query param (short-lived access token only).
+    """
+    t = None
+    if credentials and credentials.credentials:
+        t = credentials.credentials
+    if not t:
+        t = request.cookies.get("access_token")
+    if not t and token:
+        t = token
+    if not t:
+        auth = request.headers.get("authorization") or request.headers.get("Authorization")
+        if auth and auth.lower().startswith("bearer "):
+            t = auth[7:]
+    if not t:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    payload = verify_access_token(t)
+    db = _db()
+    user = db.get_user(int(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    user["_token_payload"] = payload
+    return user
+
+
 def require_roles(*roles: str):
     """Factory dependency that enforces role. Usage: Depends(require_roles('admin','lecturer'))"""
     def _checker(user=Depends(get_current_user)):

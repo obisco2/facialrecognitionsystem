@@ -399,8 +399,18 @@ export default function StudentEnrollment() {
       <p className="mb-4 shrink-0 text-sm text-ink-3">Capture or upload 5 photos of your face — at least 3 must pass validation.</p>
 
       {!started ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-[var(--radius-lg)] bg-graphite">
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 rounded-[var(--radius-lg)] bg-graphite p-6">
           <Camera className="size-8 text-graphite-ink-2" />
+          <div className="w-full max-w-md rounded-[var(--radius-md)] border border-warning-ink/30 bg-warning-tint p-4 text-left">
+            <p className="mb-2 text-sm font-semibold text-warning-ink">📸 Photo rules — read before you start</p>
+            <ul className="list-disc space-y-1 pl-5 text-xs leading-relaxed text-warning-ink">
+              <li><strong>No accessories:</strong> remove sunglasses, caps, helmets, face masks, heavy makeup.</li>
+              <li>Face the camera directly, neutral expression, eyes open.</li>
+              <li>Use a plain background with even front lighting — no backlight or harsh shadows.</li>
+              <li>Keep your whole face inside the frame, close enough to fill most of it.</li>
+              <li>Photos that break these rules fail validation and hurt recognition later.</li>
+            </ul>
+          </div>
           <div className="flex flex-col items-center gap-3 sm:flex-row">
             <Button onClick={handleStart} loading={busy}>
               <Camera className="size-4" /> Start camera

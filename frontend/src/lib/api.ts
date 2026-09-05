@@ -12,7 +12,7 @@ class ApiError extends Error {
   }
 }
 
-function getAccessToken(): string | null {
+export function getAccessToken(): string | null {
   return localStorage.getItem('attendiq.access_token')
 }
 function getRefreshToken(): string | null {
@@ -127,6 +127,10 @@ export interface SchoolClass {
   schedule?: string | null
   room?: string | null
   department?: string | null
+  faculty_name?: string | null
+  lecturer_name?: string | null
+  enrolled_count?: number
+  is_enrolled?: boolean
 }
 
 export interface AttendanceRecord {
@@ -148,7 +152,19 @@ export interface LiveSessionState {
   unknown: number
   date: string | null
   camera_active?: boolean
+  presence?: { name: string; seconds_ago: number }[]
+  presence_timeout?: number
 }
+
+export interface HardwareStatus {
+  motion: { attached: boolean; seconds_since_motion: number | null; events_total: number; note: string }
+  second_camera: { configured: boolean; active: boolean; note: string }
+  buzzer_enabled: boolean
+  motion_timeout_seconds: number
+  presence_timeout_seconds: number
+}
+export const reportMotion = () => post<{ status: string }>('/hardware/motion', { motion: true })
+export const getHardwareStatus = () => get<HardwareStatus>('/hardware/status')
 
 export interface EnrollmentSlotResult {
   slot: number
@@ -189,8 +205,23 @@ export const resetPassword = (id: number, newPassword: string) =>
 export const deleteUser = (id: number) => del<{ status: string }>(`/users/${id}`)
 
 // --- Classes ---
-export const getClasses = (lecturerId?: number) =>
-  get<SchoolClass[]>(`/classes${lecturerId ? `?lecturer_id=${lecturerId}` : ''}`)
+export interface ClassFilters {
+  lecturerId?: number
+  department?: string
+  facultyId?: number
+}
+function classQuery(f: ClassFilters = {}) {
+  const q = new URLSearchParams()
+  if (f.lecturerId) q.set('lecturer_id', String(f.lecturerId))
+  if (f.department) q.set('department', f.department)
+  if (f.facultyId) q.set('faculty_id', String(f.facultyId))
+  const s = q.toString()
+  return s ? `?${s}` : ''
+}
+export const getClasses = (lecturerId?: number, filters: Omit<ClassFilters, 'lecturerId'> = {}) =>
+  get<SchoolClass[]>(`/classes${classQuery({ ...filters, lecturerId })}`)
+export const browseClasses = (filters: Omit<ClassFilters, 'lecturerId'> = {}) =>
+  get<SchoolClass[]>(`/classes/browse${classQuery(filters)}`)
 export const createClass = (
   lecturerId: number,
   data: { name: string; code: string; schedule?: string; room?: string; department?: string },
@@ -200,6 +231,17 @@ export const deleteClass = (id: number) => del<{ status: string }>(`/classes/${i
 
 export const getClassEnrollments = (classId: number) =>
   get<{ enrolled: User[]; unenrolled: User[] }>(`/classes/${classId}/enrollments`)
+
+export interface RosterStudent {
+  id: number
+  full_name: string
+  student_id?: string | null
+  email?: string | null
+  department?: string | null
+  face_enrolled?: number
+  classes: { id: number; code: string; name: string }[]
+}
+export const getLecturerRoster = () => get<RosterStudent[]>('/lecturer/students')
 export const enrollStudent = (classId: number, studentId: number) =>
   post<{ status: string }>(`/classes/${classId}/enrollments?student_id=${studentId}`)
 export const unenrollStudent = (classId: number, studentId: number) =>
@@ -239,12 +281,24 @@ export const startSession = (classId: number, lecturerId: number, cameraSource?:
 export const stopSession = () => post<{ status: string }>('/session/stop')
 export const getLiveSession = () => get<LiveSessionState>('/session/live')
 export const videoFeedUrl = `${BASE}/session/video_feed`
+// <img> tags can't send Authorization headers, so the access token travels
+// as ?token=. Re-issue before the 15-min access token expires (see LiveSession).
+export function videoFeedUrlWithToken(cacheBuster?: string | number): string {
+  const t = getAccessToken()
+  const q = new URLSearchParams()
+  if (t) q.set('token', t)
+  if (cacheBuster !== undefined) q.set('t', String(cacheBuster))
+  const s = q.toString()
+  return s ? `${videoFeedUrl}?${s}` : videoFeedUrl
+}
 
 // --- Browser-based recognition ---
 export interface RecognizeResult {
   name: string | null
   confidence: number | null
   is_known: boolean
+  is_blocked?: boolean
+  is_live?: boolean
   box: { top: number; right: number; bottom: number; left: number }
 }
 export interface RecognizeFrameResponse {

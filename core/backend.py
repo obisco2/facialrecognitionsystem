@@ -23,6 +23,7 @@ from core.face_encoder import FaceEncoder
 from core.recognizer import Recognizer
 from bias.evaluator import BiasEvaluator
 from bias.datasets import DatasetHelper
+from fastapi.security import HTTPAuthorizationCredentials
 from core.auth import (
     create_access_token,
     create_refresh_token,
@@ -31,6 +32,8 @@ from core.auth import (
     revoke_all_user_tokens,
     get_current_user,
     require_roles,
+    security,
+    authenticate_media_request,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +162,11 @@ class CameraStreamer:
         self._last_locations = []
         self._last_names = []
         self._last_distances = []
+        # Anti-runaway presence: name -> epoch of last face sighting
+        self.last_seen = {}
+        # Second-camera placeholder (entrance/exit coverage — not opened yet)
+        from core.hardware import SecondCamera
+        self.second_camera = SecondCamera(lambda: config)
 
     def start(self, mode: str, class_id: int = None, lecturer_id: int = None, user_id: int = None, full_name: str = None, camera_source: str = None):
         if self.running:
@@ -194,6 +202,7 @@ class CameraStreamer:
         self._last_locations = []
         self._last_names = []
         self._last_distances = []
+        self.last_seen = {}
 
         if camera_source:
             try:
@@ -287,41 +296,57 @@ class CameraStreamer:
                     bottom = int(bottom_s / scale)
                     left = int(left_s / scale)
                     is_known = (name != "Unknown")
-                    colour = (0, 200, 100) if is_known else (0, 60, 200)
+                    # Blocked students are recognised but never marked — show BLOCKED box
+                    is_blocked = False
+                    if is_known and self.active_mode == "attendance" and self.session_class_id:
+                        _stu = db.get_user_by_name(name)
+                        is_blocked = bool(_stu and db.is_blocked(self.session_class_id, _stu["id"]))
+                    if is_blocked:
+                        colour = (0, 165, 255)  # orange (BGR)
+                    else:
+                        colour = (0, 200, 100) if is_known else (0, 60, 200)
 
                     cv2.rectangle(frame, (left, top), (right, bottom), colour, 2)
                     cv2.rectangle(frame, (left, bottom - 26), (right, bottom), colour, cv2.FILLED)
 
                     conf_str = f"{dist:.2f}" if dist is not None else "?"
-                    label = f"{name}  {conf_str}" if is_known else "Unknown"
+                    if is_blocked:
+                        label = f"{name}  BLOCKED"
+                    else:
+                        label = f"{name}  {conf_str}" if is_known else "Unknown"
                     cv2.putText(frame, label, (left + 5, bottom - 8),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
 
+                    # Presence heartbeat — every sighting refreshes last_seen
+                    # (lecturer sees who is still in the room vs walked away)
+                    if is_known:
+                        self.last_seen[name] = time.time()
+
                     # Mark attendance in BOTH attendance and test modes
-                    if is_known and name not in self.marked_ids:
+                    if is_known and not is_blocked and name not in self.marked_ids:
                         if self.active_mode == "attendance" and self.session_class_id:
                             student = db.get_user_by_name(name)
                             if student and student["id"] not in self.marked_ids:
-                                if db.is_blocked(self.session_class_id, student["id"]):
-                                    is_known = False
-                                else:
-                                    logged = db.log_attendance(
-                                        student["id"],
-                                        self.session_class_id,
-                                        session_date=self.session_date,
-                                        method="face",
-                                        confidence=dist,
-                                        marked_by=self.lecturer_id
-                                    )
-                                    self.marked_ids.add(student["id"])
-                                    self.marked_ids.add(name)
-                                    if logged:
-                                        ts = datetime.now().strftime("%H:%M:%S")
-                                        self.marked_names.append({
-                                            "time": ts,
-                                            "name": name,
-                                            "conf": f"{dist:.2f}" if dist else "—"
-                                        })
+                                logged = db.log_attendance(
+                                    student["id"],
+                                    self.session_class_id,
+                                    session_date=self.session_date,
+                                    method="face",
+                                    confidence=dist,
+                                    marked_by=self.lecturer_id
+                                )
+                                self.marked_ids.add(student["id"])
+                                self.marked_ids.add(name)
+                                if logged:
+                                    ts = datetime.now().strftime("%H:%M:%S")
+                                    self.marked_names.append({
+                                        "time": ts,
+                                        "name": name,
+                                        "conf": f"{dist:.2f}" if dist else "—"
+                                    })
+                                    if config.buzzer_enabled:
+                                        from core.hardware import beep
+                                        beep()
                         elif self.active_mode == "test":
                             # In test mode, add to marked so frontend polling can detect recognition
                             ts = datetime.now().strftime("%H:%M:%S")
@@ -618,11 +643,20 @@ def delete_user(user_id: int, current_user=Depends(require_roles("admin"))):
     return {"status": "ok"}
 
 @app.get("/api/classes")
-def get_classes(lecturer_id: Optional[int] = None, current_user=Depends(get_current_user)):
+def get_classes(lecturer_id: Optional[int] = None, department: Optional[str] = None,
+                faculty_id: Optional[int] = None, current_user=Depends(get_current_user)):
     # Students can only see classes they are enrolled in
     if current_user["role"] == "student":
         return db.get_student_classes(current_user["id"])
-    return db.get_classes(lecturer_id)
+    return db.get_classes(lecturer_id, department=department, faculty_id=faculty_id)
+
+@app.get("/api/classes/browse")
+def browse_classes(department: Optional[str] = None, faculty_id: Optional[int] = None,
+                   current_user=Depends(get_current_user)):
+    """Course catalog for registration: all classes + is_enrolled flag + filters."""
+    if current_user["role"] == "student":
+        return db.get_browse_classes(current_user["id"], department=department, faculty_id=faculty_id)
+    return db.get_classes(department=department, faculty_id=faculty_id)
 
 @app.get("/api/classes/unassigned")
 def get_unassigned_classes(current_user=Depends(require_roles("admin", "lecturer"))):
@@ -704,6 +738,13 @@ def delete_class(class_id: int, current_user=Depends(require_roles("admin"))):
     db.delete_class(class_id)
     return {"status": "ok"}
 
+@app.get("/api/lecturer/students")
+def get_lecturer_roster(current_user=Depends(require_roles("admin", "lecturer"))):
+    """Roster tab: every student taking the caller's classes + their courses."""
+    if current_user["role"] == "lecturer":
+        return db.get_roster(lecturer_id=current_user["id"])
+    return db.get_roster()
+
 @app.get("/api/classes/{class_id}/enrollments")
 def get_class_enrollments(class_id: int, current_user=Depends(get_current_user)):
     # Students can only see their own class enrollments
@@ -721,12 +762,34 @@ def get_class_enrollments(class_id: int, current_user=Depends(get_current_user))
     }
 
 @app.post("/api/classes/{class_id}/enrollments")
-def enroll_student(class_id: int, student_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
-    db.enroll_student(student_id, class_id)
+def enroll_student(class_id: int, student_id: int, current_user=Depends(get_current_user)):
+    # Students may only register themselves; blocked students are refused
+    if current_user["role"] == "student":
+        if student_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Students can only register themselves")
+        if db.is_blocked(class_id, student_id):
+            raise HTTPException(status_code=403, detail="You are blocked from this class")
+    elif current_user["role"] not in ("admin", "lecturer"):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    if not db.get_user(student_id):
+        raise HTTPException(status_code=404, detail="Student not found")
+    ok = db.enroll_student(student_id, class_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Already registered")
     return {"status": "ok"}
 
 @app.delete("/api/classes/{class_id}/enrollments/{student_id}")
-def unenroll_student(class_id: int, student_id: int, current_user=Depends(require_roles("admin", "lecturer"))):
+def unenroll_student(class_id: int, student_id: int, current_user=Depends(get_current_user)):
+    # Students may only unregister themselves; lecturers remove anyone from own class
+    if current_user["role"] == "student":
+        if student_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Students can only unregister themselves")
+    elif current_user["role"] == "lecturer":
+        c = db.get_class(class_id)
+        if c and c["lecturer_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not your class")
+    elif current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Not allowed")
     db.unenroll_student(student_id, class_id)
     return {"status": "ok"}
 
@@ -813,13 +876,44 @@ def stop_session(current_user=Depends(require_roles("admin", "lecturer"))):
 
 @app.get("/api/session/live")
 def get_live_session(current_user=Depends(get_current_user)):
+    now = time.time()
+    presence = [
+        {"name": n, "seconds_ago": int(now - ts)}
+        for n, ts in streamer.last_seen.items()
+    ]
     return {
         "running": streamer.running,
         "mode": streamer.active_mode,
         "marked": streamer.marked_names,
         "unknown": streamer.unknown_count,
         "date": streamer.session_date,
-        "camera_active": getattr(streamer, "camera_available", True)
+        "camera_active": getattr(streamer, "camera_available", True),
+        "presence": presence,
+        "presence_timeout": config.presence_timeout_seconds,
+    }
+
+class MotionEvent(BaseModel):
+    motion: bool = True
+
+@app.post("/api/hardware/motion")
+def report_motion(req: MotionEvent, current_user=Depends(require_roles("admin", "lecturer"))):
+    """PIR motion-sensor webhook placeholder — feeds room-presence tracking."""
+    from core.hardware import motion_sensor
+    if not req.motion:
+        return {"status": "ok", "motion": False}
+    return {"status": "ok", **motion_sensor.report_motion()}
+
+@app.get("/api/hardware/status")
+def hardware_status(current_user=Depends(get_current_user)):
+    """Motion sensor + second camera + buzzer status (placeholders where noted)."""
+    from core.hardware import motion_sensor
+    second = streamer.second_camera.status() if getattr(streamer, "second_camera", None) else {"configured": False, "active": False}
+    return {
+        "motion": motion_sensor.status(),
+        "second_camera": second,
+        "buzzer_enabled": config.buzzer_enabled,
+        "motion_timeout_seconds": config.motion_timeout_seconds,
+        "presence_timeout_seconds": config.presence_timeout_seconds,
     }
 
 async def gen_frames():
@@ -830,7 +924,13 @@ async def gen_frames():
         await asyncio.sleep(0.04)
 
 @app.get("/api/session/video_feed")
-def video_feed(current_user=Depends(get_current_user)):
+def video_feed(request: Request, token: Optional[str] = None,
+               credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    # <img> tags can't send Authorization headers, so accept ?token= too.
+    # Lecturer/admin only — same as session start/stop and frame recognition.
+    current_user = authenticate_media_request(request, token, credentials)
+    if current_user["role"] not in ("admin", "lecturer"):
+        raise HTTPException(status_code=403, detail="Requires role: admin, lecturer")
     return StreamingResponse(
         gen_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -891,10 +991,19 @@ def recognize_frame(req: RecognizeFrameRequest, current_user=Depends(require_rol
                 is_live = False
 
         is_known = (name != "Unknown") and is_live
+        # Blocked students keep their name tag but are never marked present
+        student = db.get_user_by_name(name) if is_known else None
+        is_blocked = bool(
+            student and streamer.running and streamer.active_mode == "attendance"
+            and db.is_blocked(streamer.session_class_id, student["id"])
+        )
+        if is_blocked:
+            is_known = False
         recognized.append({
-            "name": name if is_known else None,
+            "name": name if (is_known or is_blocked) else None,
             "confidence": round(dist, 4) if dist is not None else None,
             "is_known": is_known,
+            "is_blocked": is_blocked,
             "is_live": is_live,
             "liveness_score": liveness_score,
             "box": {
@@ -905,15 +1014,16 @@ def recognize_frame(req: RecognizeFrameRequest, current_user=Depends(require_rol
             },
         })
 
+        # Presence heartbeat for anti-runaway tracking
+        if is_known:
+            streamer.last_seen[name] = time.time()
+
         # Log attendance in database if session is running
-        if is_known and streamer.running and streamer.active_mode == "attendance":
+        if is_known and not is_blocked and streamer.running and streamer.active_mode == "attendance":
             if name not in streamer.marked_ids:
-                student = db.get_user_by_name(name)
                 # Ensure student exists, hasn't been marked yet, and IS ENROLLED in this class
                 if student and student["id"] not in streamer.marked_ids:
-                    if db.is_blocked(streamer.session_class_id, student["id"]):
-                        is_known = False
-                    elif db.is_enrolled(student["id"], streamer.session_class_id):
+                    if db.is_enrolled(student["id"], streamer.session_class_id):
                         logged = db.log_attendance(
                             student["id"],
                             streamer.session_class_id,
@@ -931,6 +1041,9 @@ def recognize_frame(req: RecognizeFrameRequest, current_user=Depends(require_rol
                                 "name": name,
                                 "conf": f"{dist:.2f}" if dist else "—"
                             })
+                            if config.buzzer_enabled:
+                                from core.hardware import beep
+                                beep()
                     else:
                         # Optional: Log that an unenrolled face was seen?
                         pass

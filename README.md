@@ -93,17 +93,19 @@ python main.py        # Opens in a native window (or main_web.py)
 - Run bias evaluation and view accuracy charts
 
 ### Lecturer
-- Dashboard with class overview
-- Log in using **Staff ID**
-- Manage own classes, departments, and enrollment
+- Dashboard with class overview; dedicated **Students tab** (searchable roster with each student's courses)
+- Log in via the **Lecturer tab** using **Staff ID** (role-mismatch guard blocks cross-role sign-in)
+- Manage own classes, departments, and enrollment; **block/unblock** students (blocked faces show an amber **BLOCKED** box and are never marked)
 - Start/stop live attendance sessions with real-time **multi-face** recognition (using full frame dlib landmark contexts) and **external USB camera selector** (browser `enumerateDevices` + `deviceId` constraint, with automatic fallback to browser when server camera is unavailable)
+- **Presence tracking**: green in-room / grey walked-away dots per marked student, verification chime on each new mark, PIR motion + second-camera placeholders under `GET /api/hardware/status`
 - Log manual attendance for students not recognized by camera
 - Diagnostics via `GET /api/camera/list` (probe indices 0-4) and `GET /api/session/live` (`camera_active` flag)
 
 ### Student
-- Dashboard with attendance history and per-class breakdown
-- Face enrollment (capture via WebRTC camera featuring **3-frame automated live liveness scan** or upload files, validate, confirm) with **external USB camera selector** when multiple video inputs are present
-- Settings (account info, retrain face model)
+- Dashboard with attendance history, per-class breakdown, and **course registration** (faculty/department filters, add/remove courses yourself)
+- Face enrollment (capture via WebRTC camera featuring **3-frame automated live liveness scan** or upload files, validate, confirm) with **external USB camera selector** when multiple video inputs are present — bare faces only, **no sunglasses/caps/masks** (shown up front; accessories are the #1 failure cause)
+- Settings (account info, retrain face model, hashed security question + emergency PIN for self password reset)
+- First-login **onboarding tour** per role
 
 ---
 

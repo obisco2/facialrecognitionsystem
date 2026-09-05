@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Play, Square, UserPlus, CameraOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { getClasses, getUsers, startSession, stopSession, getLiveSession, logManualAttendance, videoFeedUrl, recognizeFrame } from '@/lib/api'
+import { getClasses, getUsers, startSession, stopSession, getLiveSession, logManualAttendance, videoFeedUrlWithToken, recognizeFrame, reportMotion } from '@/lib/api'
 import type { User, RecognizeResult } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
 import { useAuth } from '@/lib/auth'
@@ -34,6 +34,22 @@ export default function LiveSession() {
   const [startTime, setStartTime] = useState<number | null>(null)
   const [sessionTime, setSessionTime] = useState('')
   const [elapsedTime, setElapsedTime] = useState('')
+  // MJPEG <img> can't send auth headers — token rides in the URL and must be
+  // re-issued before the 15-min access token expires (fetch polling keeps it fresh)
+  const [feedUrl, setFeedUrl] = useState('')
+  const [feedError, setFeedError] = useState(false)
+
+  useEffect(() => {
+    if (!running) {
+      setFeedUrl('')
+      setFeedError(false)
+      return
+    }
+    setFeedError(false)
+    setFeedUrl(videoFeedUrlWithToken(Date.now()))
+    const id = setInterval(() => setFeedUrl(videoFeedUrlWithToken(Date.now())), 10 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [running])
 
   useEffect(() => {
     if (running) {
@@ -105,6 +121,31 @@ export default function LiveSession() {
     if (manualMarked.has(s.id)) return true
     return live?.marked.some((m) => m.name === s.full_name) ?? false
   }
+
+// Short two-tone verification chime (no hardware needed). The server also
+// beeps via core/hardware.py when it runs on a machine with audio.
+function playVerifyBeep() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    const ctx = new Ctx()
+    const now = ctx.currentTime
+    ;[880, 1320].forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.0001, now + i * 0.12)
+      gain.gain.exponentialRampToValueAtTime(0.25, now + i * 0.12 + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.12 + 0.11)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(now + i * 0.12)
+      osc.stop(now + i * 0.12 + 0.12)
+    })
+    setTimeout(() => ctx.close(), 500)
+  } catch {
+    // Audio unavailable (headless/denied) — silent
+  }
+}
 
   // Enumerate camera devices
   const enumerateCameras = useCallback(async () => {
@@ -208,6 +249,25 @@ export default function LiveSession() {
     const interval = setInterval(captureAndRecognize, RECOGNITION_INTERVAL)
     return () => clearInterval(interval)
   }, [running, cameraActive, captureAndRecognize, live?.camera_active])
+
+  // Verification sound + presence tracking (WebAudio beep on each new mark)
+  const [soundOn, setSoundOn] = useState(true)
+  const seenNames = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!running) {
+      seenNames.current = new Set()
+      return
+    }
+    const names = live?.marked.map(m => m.name) ?? []
+    const fresh = names.filter(n => !seenNames.current.has(n))
+    seenNames.current = new Set(names)
+    if (fresh.length > 0 && soundOn) playVerifyBeep()
+  }, [live?.marked, running, soundOn])
+
+  function presenceOf(name: string): number | null {
+    const p = live?.presence?.find(x => x.name === name)
+    return p ? p.seconds_ago : null
+  }
 
   async function handleStart() {
     if (!classId || !user) return
@@ -338,7 +398,27 @@ export default function LiveSession() {
           )}
           {running ? (
             live?.camera_active ? (
-              <img src={videoFeedUrl} alt="Live camera feed" className="h-full w-full object-contain" />
+              <>
+                {feedUrl && (
+                  <img
+                    key={feedUrl}
+                    src={feedUrl}
+                    alt="Live camera feed"
+                    className="h-full w-full object-contain"
+                    onError={() => setFeedError(true)}
+                    onLoad={() => setFeedError(false)}
+                  />
+                )}
+                {feedError && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 p-6 text-center">
+                    <CameraOff className="size-8 text-danger" />
+                    <p className="text-sm text-danger">Stream failed — likely unauthorized or camera busy.</p>
+                    <Button size="sm" onClick={() => { setFeedError(false); setFeedUrl(videoFeedUrlWithToken(Date.now())) }}>
+                      Retry stream
+                    </Button>
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 <video
@@ -354,10 +434,13 @@ export default function LiveSession() {
                 {faces.map((face, i) => {
                   if (!face.box) return null
                   const { top, right, bottom, left } = face.box
+                  const blocked = !!face.is_blocked
+                  const border = blocked ? 'border-amber-400' : face.is_known ? 'border-green-400' : 'border-red-400'
+                  const tag = blocked ? 'bg-amber-500/90' : face.is_known ? 'bg-green-500/80' : 'bg-red-500/80'
                   return (
                     <div
                       key={i}
-                      className={`absolute border-2 ${face.is_known ? 'border-green-400' : 'border-red-400'}`}
+                      className={`absolute border-2 ${border}`}
                       style={{
                         top: `${(top / videoDims.height) * 100}%`,
                         left: `${(left / videoDims.width) * 100}%`,
@@ -366,13 +449,13 @@ export default function LiveSession() {
                       }}
                     >
                       <div
-                        className={`absolute -top-6 left-0 whitespace-nowrap px-1 text-xs text-white ${
-                          face.is_known ? 'bg-green-500/80' : 'bg-red-500/80'
-                        }`}
+                        className={`absolute -top-6 left-0 whitespace-nowrap px-1 text-xs text-white ${tag}`}
                       >
-                        {face.is_known
-                          ? `${face.name} ${face.confidence?.toFixed(2)}`
-                          : 'Unknown'}
+                        {blocked
+                          ? `${face.name ?? 'Student'} · BLOCKED`
+                          : face.is_known
+                            ? `${face.name} ${face.confidence?.toFixed(2)}`
+                            : 'Unknown'}
                       </div>
                     </div>
                   )
@@ -403,21 +486,61 @@ export default function LiveSession() {
           </div>
         )}
 
-        {/* Marked list */}
+        {/* Marked list + presence (anti-runaway) */}
         {running && (live?.marked.length ?? 0) > 0 && (
-          <ul className="max-h-40 space-y-1.5 overflow-y-auto shrink-0">
-            {live!.marked.slice().reverse().map((m, i) => (
-              <li
-                key={i}
-                className="flex items-center justify-between rounded-[var(--radius-sm)] border border-graphite-rule bg-graphite-2 px-3 py-2"
+          <>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setSoundOn(v => !v)}
+                className="rounded-[var(--radius-sm)] border border-graphite-rule px-2 py-1 font-mono-label text-graphite-ink-2 hover:border-accent"
+                title="Verification chime on new mark"
               >
-                <span className="text-sm text-graphite-ink">{m.name}</span>
-                <span className="font-mono-label text-graphite-ink-2">
-                  {m.time} · conf {m.conf}
-                </span>
-              </li>
-            ))}
-          </ul>
+                {soundOn ? '🔔 sound on' : '🔕 muted'}
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    await reportMotion()
+                    showToast('success', 'Motion event recorded (PIR placeholder)')
+                  } catch (e) {
+                    showToast('error', e instanceof Error ? e.message : 'Motion report failed')
+                  }
+                }}
+                className="rounded-[var(--radius-sm)] border border-graphite-rule px-2 py-1 font-mono-label text-graphite-ink-2 hover:border-accent"
+                title="Demo: simulate a PIR motion-sensor event"
+              >
+                📡 motion
+              </button>
+              <span className="font-mono-label text-graphite-ink-2">
+                green dot = in room · grey = walked away
+              </span>
+            </div>
+            <ul className="max-h-40 space-y-1.5 overflow-y-auto shrink-0">
+              {live!.marked.slice().reverse().map((m, i) => {
+                const ago = presenceOf(m.name)
+                const timeout = live?.presence_timeout ?? 60
+                const present = ago !== null && ago <= timeout
+                return (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between rounded-[var(--radius-sm)] border border-graphite-rule bg-graphite-2 px-3 py-2"
+                  >
+                    <span className="flex items-center gap-2 text-sm text-graphite-ink">
+                      <span
+                        className={`inline-block size-2 rounded-full ${present ? 'bg-green-400' : 'bg-zinc-500'}`}
+                        title={ago === null ? 'not seen yet' : `last seen ${ago}s ago`}
+                      />
+                      {m.name}
+                    </span>
+                    <span className="font-mono-label text-graphite-ink-2">
+                      {m.time} · conf {m.conf}
+                      {ago !== null && !present ? ' · left?' : ''}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
         )}
 
         {/* Manual attendance */}

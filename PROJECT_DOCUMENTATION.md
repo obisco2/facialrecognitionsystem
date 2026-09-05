@@ -311,6 +311,21 @@ The site shipped with frontend-only route guards and open `curl`-able endpoints 
 * **RBAC**: `get_current_user` / `require_roles()` guard every route. `POST /api/recognize/frame`, `POST /api/attendance/manual` (with `marked_by` overwritten to caller + class-ownership check), `POST /api/session/start|stop`, `GET /api/session/video_feed` → `lecturer|admin` only; `POST /api/users`, `DELETE /api/users/{id}`, `GET /api/config`, `GET /api/admin/stats`, `POST /api/bias/*` → `admin` only; enrollment → `student:self|admin`; student summary/attendance → self-or-privileged. Returns `401` without `Authorization: Bearer` and `403` for role mismatch, blocking `curl` spoof.
 * **Frontend**: `frontend/src/lib/api.ts` injects `Authorization` from `attendiq.access_token`, auto-refreshes `401` via `POST /api/auth/refresh`, clears on failure; `frontend/src/lib/auth.tsx` gains `setAuth()` (stores both user + tokens) and `logout()` clears tokens; `frontend/src/pages/Login.tsx:24` now calls `setAuth`.
 * **Transport**: `security_headers_middleware` (`core/backend.py:108`) adds `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `HSTS`; duplicate `app = FastAPI()` initializer removed; CORS `allow_credentials` preserved for `https://attendiq.tadstech.dev`.
+* **Media auth fix**: `GET /api/session/video_feed` is loaded by an `<img>` tag, which cannot send `Authorization` headers — the stream 401'd everywhere a real camera exists (local dev) while the headless VPS silently used the browser-camera fallback. Fixed via `core/auth.py:authenticate_media_request()` accepting `?token=<access_token>` plus a lecturer/admin role check; the frontend builds the URL with `videoFeedUrlWithToken()` and re-issues it every 10 minutes (access tokens live 15).
+
+### 10.7 Course Registration, Roster, Onboarding & Presence Hardware
+
+**Student self-registration.** The dashboard's Course Registration card used to call endpoints students were forbidden from (403) and listed only already-taken courses. Now: `GET /api/classes/browse` returns the full catalog with an `is_enrolled` flag plus `?department=` / `?faculty_id=` filters (faculty resolved by joining `departments`→`faculties` on the class department name); `POST`/`DELETE /api/classes/{id}/enrollments` accept student self-service (`student_id` must equal the caller, blocked students get 403, lecturers can only touch their own classes). The UI adds faculty/department dropdowns and per-course registered counts.
+
+**Lecturer Students tab.** `GET /api/lecturer/students` returns every student taking the caller's classes with their course codes (`db.get_roster()`, password hashes never leave the DB). The new `/lecturer/students` page adds search plus per-course filtering; removal stays in Classes → manage enrollment, next to block/unblock.
+
+**Blocked bounding boxes.** Both recognition paths now tag blocked students instead of silently dropping them: `recognize_frame` returns `is_blocked: true` (name kept, `is_known: false`, never logged) and the MJPEG `_loop` draws an orange `NAME BLOCKED` box; the React overlay renders an amber box with a `· BLOCKED` tag.
+
+**Onboarding & photo rules.** First login per user shows a role-specific Getting Started dialog (`OnboardingDialog`, dismissed flag in `localStorage`); the enrollment start screen now lists photo rules up front (no sunglasses/caps/masks, plain background, even front light) since accessories are the #1 recognition failure.
+
+**Role login screens.** One route, three tabs — Student (matric), Lecturer (staff ID), Admin (username) — each with its own accent, placeholders, and a role-mismatch guard that refuses to sign a student in on the lecturer tab and vice versa.
+
+**Presence hardware (placeholder + working core).** `core/hardware.py` adds: `beep()` (Windows `winsound`, terminal bell elsewhere, never raises), a `MotionSensor` stub fed by `POST /api/hardware/motion` (PIR webhook shape), and a `SecondCamera` stub reading `[Hardware] SECOND_CAMERA_INDEX/_URL` from `config.ini`. The anti-runaway core works today: every recognized face refreshes `streamer.last_seen`, `GET /api/session/live` exposes `presence` + `presence_timeout`, the marked list shows green "in room" vs grey "walked away" dots, the server beeps on each new mark (config `BUZZER_ENABLED`), and the browser plays a two-tone WebAudio chime with a mute toggle. `GET /api/hardware/status` reports all three subsystems.
 
 ---
 
@@ -334,6 +349,9 @@ The site shipped with frontend-only route guards and open `curl`-able endpoints 
 6. **How do you handle security?** Self-hosted JWT (`HS256` access 15m + refresh 7d with `jti`/`sha256` hashed storage in `refresh_tokens`, `core/auth.py`), RBAC via `get_current_user`/`require_roles` on every endpoint, `PBKDF2-SHA256` 260k + salted, security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `HSTS`), rate limiting (30/min general + 5/min login, exempt video polling), input validation (frame `max_length 10M`, image MIME/size on upload), and parameterised SQL.
 7. **Why not Supabase?** Considered but deferred: self-hosted JWT keeps SQLite + single VPS + desktop `pywebview` intact for the final year project; Supabase (managed Postgres + RLS + GoTrue) is ideal for SaaS scale but needs schema migration, face BLOB storage redesign, and hybrid inference service — planned as the PostgreSQL migration path.
 8. **Why Docker?** Ensures the application runs identically across development, testing, and production. The Dockerfile includes a health check, and docker-compose handles volume mounting for persistent data.
+9. **What stops a blocked student appearing present?** Nothing is logged, and both video paths say so: the MJPEG loop draws an orange `NAME BLOCKED` box, the browser overlay shows an amber `· BLOCKED` tag from `is_blocked: true`.
+10. **What stops scan-and-run-away?** Every sighting refreshes `last_seen`; the marked list shows green in-room vs grey walked-away dots against a 60s timeout, both chimes fire on each new mark, and PIR/second-camera stubs are ready for hardware.
+11. **Why three login screens?** One route, three tabs (matric / staff ID / username) with a role-mismatch guard, so a student credential can never open the lecturer console even with a valid password.
 
 ---
 
@@ -347,18 +365,20 @@ The site shipped with frontend-only route guards and open `curl`-able endpoints 
 | **Lighting Sensitivity** | Haar Cascade degrades less after `equalizeHist` tuning, but harsh shadows or strong backlight still lower recall | Reduced detection rate in poorly lit rooms; DNN/MTCNN upgrade planned |
 | **Camera Coverage** | One logical stream at a time; external USB vs built-in is selectable, but simultaneous multi-camera aggregation is not yet implemented | Cannot cover multiple entrance points simultaneously |
 | **Database** | SQLite is single-writer; no concurrent write scaling | Unsuitable for multi-server horizontal deployment |
-| **Authentication** | Now JWT + RBAC (self-hosted, HS256, 15m/7d) — previously frontend-only; still no MFA/recovery flow | Add email verification + password reset tokens |
+| **Authentication** | JWT + RBAC (self-hosted, HS256, 15m/7d) + hashed security Q/PIN self-reset; still no MFA | Add TOTP MFA + audit log table |
 | **Bias Dataset** | Evaluation requires manually annotated demographic images | Results depend on dataset size and representativeness |
 | **Multi-Face Throughput** | Multi-face now supported (all faces per frame); extreme crowd scenes (>6 faces at 640×480, 0.25 scale) may still drop distant faces due to `minSize` | Increase `FRAME_SCALE` to 0.35 or resolution to 720p for large groups |
+| **Presence Hardware** | Face-sighting presence + beeps work; PIR motion and camera 2 are wired stubs awaiting devices | Attach PIR webhook + open second capture in streamer |
+| **Runaway Students** | Presence dots flag walk-aways, but nothing auto-unmarks yet | Auto-flag absentees unseen for a full session window |
 
 ### 12.2 Future Improvements
 
 1. **Anti-Spoofing Sensors**: Upgrade from software-based 3D landmark tracking to hardware-based IR/Depth sensors for enterprise-grade security against deepfakes.
-2. **JWT Hardening Next**: Add email verification, password-reset tokens, MFA (TOTP), and audit log table; rotate secrets via env and add `httponly` `Secure` refresh cookie in production behind `https`.
-3. **PostgreSQL Migration (Supabase path)**: Replace SQLite with managed Postgres + RLS + GoTrue (Supabase Auth); migrate `refresh_tokens` to Supabase, move face BLOBs to Storage, and run FastAPI as inference-only service.
-4. **CNN-Based Detection**: Upgrade from Haar Cascade to MTCNN or RetinaFace for higher detection accuracy across demographics.
-5. **CI/CD Pipeline**: Add GitHub Actions for automated testing, linting, and container builds on every push.
-6. **Multi-Camera Support**: Extend the streaming architecture to aggregate frames from multiple camera sources.
+2. **Presence Hardware Rollout**: Connect the PIR sensor to `POST /api/hardware/motion`, open the configured second camera inside `CameraStreamer`, and drive a GPIO buzzer from `core/hardware.py:beep()`; then auto-flag students unseen for a full session window.
+3. **JWT Hardening Next**: Add email verification, MFA (TOTP), and audit log table; rotate secrets via env and add `httponly` `Secure` refresh cookie in production behind `https`. (Password self-reset via hashed Q/PIN is done.)
+4. **PostgreSQL Migration (Supabase path)**: Replace SQLite with managed Postgres + RLS + GoTrue (Supabase Auth); migrate `refresh_tokens` to Supabase, move face BLOBs to Storage, and run FastAPI as inference-only service.
+5. **CNN-Based Detection**: Upgrade from Haar Cascade to MTCNN or RetinaFace for higher detection accuracy across demographics.
+6. **CI/CD Pipeline**: Add GitHub Actions for automated testing, linting, and container builds on every push.
 7. **Attendance Analytics**: Build dashboards with trend analysis, anomaly detection (e.g., sudden drops in attendance), and automated alerts for lecturers.
 
 ---
@@ -448,10 +468,11 @@ facialrecognitionsystem/
 ├── README.md                   # Quick start + architecture
 │
 ├── core/                       # Backend (all in use)
-│   ├── config.py               # Singleton + JWT getters
-│   ├── auth.py                 # JWT HS256 + RBAC (get_current_user, require_roles)
-│   ├── database.py             # SQLite + refresh_tokens + class_blocks + security Q/PIN
-│   ├── backend.py              # FastAPI + JWT + RBAC + blocks + camera/list + security headers
+│   ├── config.py               # Singleton + JWT getters + [Hardware] timeouts
+│   ├── auth.py                 # JWT HS256 + RBAC + media (?token=) auth
+│   ├── database.py             # SQLite + refresh_tokens + class_blocks + security Q/PIN + roster/browse
+│   ├── backend.py              # FastAPI + JWT + RBAC + blocks + browse + presence + hardware stubs
+│   ├── hardware.py             # Buzzer beep + PIR motion stub + second-camera stub
 │   ├── face_detector.py        # Haar/DNN (equalizeHist, multi-face)
 │   ├── face_encoder.py         # dlib 128-D / LBPH
 │   └── recognizer.py           # Recognition engine (CAP_DSHOW)
@@ -461,12 +482,13 @@ facialrecognitionsystem/
 │   └── datasets.py
 │
 ├── frontend/                   # React 19 + TS + Vite + Tailwind v4
+│   ├── src/pages/ (role tabs)  # Login (Student/Lecturer/Admin)
 │   ├── src/pages/admin/        # Dashboard, Classes (blocks+assign), Users, Bias, Settings
-│   ├── src/pages/lecturer/     # Dashboard, Classes (blocks+unassigned), LiveSession (USB selector), History
-│   ├── src/pages/student/      # Dashboard, Enrollment (USB), Settings (security Q/PIN)
-│   ├── src/lib/api.ts          # Typed client (Bearer + auto-refresh) + blocks/security
+│   ├── src/pages/lecturer/     # Dashboard, Classes, Students (roster), LiveSession (USB+presence+chime), History
+│   ├── src/pages/student/      # Dashboard (registration filters), Enrollment (photo rules), Settings (security Q/PIN)
+│   ├── src/lib/api.ts          # Typed client (Bearer + auto-refresh) + browse/roster/hardware
 │   ├── src/lib/auth.tsx        # setAuth/clearTokens
-│   └── src/components/         # AppShell, ProtectedRoute, UI
+│   └── src/components/         # AppShell, ProtectedRoute, OnboardingDialog, UI
 │
 ├── tests/                      # pytest
 │   ├── test_config.py

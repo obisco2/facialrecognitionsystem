@@ -1,11 +1,11 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { CheckCircle2, ScanFace, AlertTriangle, BookOpen, Plus, X } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { getStudentAttendance, getStudentSummary, getClasses, enrollStudent, unenrollStudent } from '@/lib/api'
+import { getStudentAttendance, getStudentSummary, browseClasses, enrollStudent, unenrollStudent, getFaculties, getDepartments } from '@/lib/api'
 import type { AttendanceRecord } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showToast } from '@/components/ui/toast'
@@ -48,16 +48,35 @@ export default function StudentDashboard() {
     enabled: !!user,
   })
 
-  // Fetch all classes for registration
+  // Course catalog filters
+  const [facultyId, setFacultyId] = useState<number | ''>('')
+  const [department, setDepartment] = useState('')
+
+  const { data: faculties } = useQuery({
+    queryKey: ['faculties'],
+    queryFn: getFaculties,
+    enabled: !!user,
+  })
+  const { data: departments } = useQuery({
+    queryKey: ['departments', facultyId || 'all'],
+    queryFn: () => getDepartments(facultyId === '' ? undefined : facultyId),
+    enabled: !!user,
+  })
+
+  // Fetch course catalog for registration (all classes + enrolled flag)
   const { data: allClasses } = useQuery({
-    queryKey: ['classes'],
-    queryFn: () => getClasses(),
+    queryKey: ['classes', 'browse', facultyId || 'all', department || 'all'],
+    queryFn: () => browseClasses({
+      facultyId: facultyId === '' ? undefined : facultyId,
+      department: department || undefined,
+    }),
     enabled: !!user,
   })
 
   const enrollMut = useMutation({
     mutationFn: (classId: number) => enrollStudent(classId, user!.id),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classes', 'browse'] })
       qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
       showToast('success', 'Successfully registered for class')
     },
@@ -67,6 +86,7 @@ export default function StudentDashboard() {
   const unenrollMut = useMutation({
     mutationFn: (classId: number) => unenrollStudent(classId, user!.id),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classes', 'browse'] })
       qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
       showToast('success', 'Unregistered from class')
     },
@@ -242,13 +262,40 @@ export default function StudentDashboard() {
           <p className="text-sm text-ink-3">Select the courses you are offering this semester.</p>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select
+              value={facultyId}
+              onChange={(e) => {
+                setFacultyId(e.target.value === '' ? '' : Number(e.target.value))
+                setDepartment('')
+              }}
+              className="h-10 flex-1 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+              aria-label="Filter by faculty"
+            >
+              <option value="">All faculties</option>
+              {faculties?.map((f) => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
+            <select
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+              className="h-10 flex-1 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+              aria-label="Filter by department"
+            >
+              <option value="">All departments</option>
+              {departments?.map((d) => (
+                <option key={d.id} value={d.name}>{d.name}</option>
+              ))}
+            </select>
+          </div>
           {!allClasses ? (
             <p className="text-sm text-ink-3">Loading classes...</p>
           ) : allClasses.length === 0 ? (
-            <p className="text-sm text-ink-3">No classes available.</p>
+            <p className="text-sm text-ink-3">No classes match these filters.</p>
           ) : (
             allClasses.map((cls) => {
-              const isEnrolled = summary?.some((s) => s.class_id === cls.id)
+              const isEnrolled = cls.is_enrolled ?? summary?.some((s) => s.class_id === cls.id)
               return (
                 <div key={cls.id} className="flex items-center justify-between gap-4 p-3 rounded-md bg-paper-2 border border-paper-3">
                   <div>
@@ -256,7 +303,11 @@ export default function StudentDashboard() {
                       <span className="font-mono-label text-accent">{cls.code}</span>
                       <span className="truncate text-sm font-medium text-ink">{cls.name}</span>
                     </div>
-                    {cls.department && <p className="text-xs text-ink-3">Dept: {cls.department}</p>}
+                    <p className="text-xs text-ink-3">
+                      {[cls.department, cls.faculty_name].filter(Boolean).join('  ·  ') || '—'}
+                      {cls.lecturer_name ? `  ·  ${cls.lecturer_name}` : ''}
+                      {typeof cls.enrolled_count === 'number' ? `  ·  ${cls.enrolled_count} registered` : ''}
+                    </p>
                   </div>
                   {isEnrolled ? (
                     <button
