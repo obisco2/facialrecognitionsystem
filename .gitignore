@@ -53,3 +53,6 @@ Thumbs.db
 docs/
 scripts/generate_docs.py
 scripts/generate_fullcoverage_pdf.py
+
+# Previous-owner git identity backup (never push)
+old.txt/
