@@ -187,20 +187,35 @@ class DatabaseManager:
     def _init_schema(self):
         with self._conn:
             self._conn.executescript(_SCHEMA)
-            # Run safe migrations for new columns
-            for tbl, col, coltype in [
-                ("users", "faculty", "TEXT"),
-                ("users", "department", "TEXT"),
-                ("students", "faculty", "VARCHAR(100)"),
-                ("classes", "department", "TEXT"),
-                ("users", "security_question", "TEXT"),
-                ("users", "security_answer_hash", "TEXT"),
-                ("users", "emergency_pin_hash", "TEXT"),
-            ]:
+            # Self-healing migrations: add any expected column missing from
+            # pre-existing DB files (old installs predate title/security/etc).
+            expected = {
+                "users": {
+                    "title": "TEXT",
+                    "student_id": "TEXT",
+                    "email": "TEXT",
+                    "faculty": "TEXT",
+                    "department": "TEXT",
+                    "face_enrolled": "INTEGER NOT NULL DEFAULT 0",
+                    "security_question": "TEXT",
+                    "security_answer_hash": "TEXT",
+                    "emergency_pin_hash": "TEXT",
+                },
+                "students": {"faculty": "VARCHAR(100)"},
+                "classes": {"department": "TEXT"},
+            }
+            for tbl, cols in expected.items():
                 try:
-                    self._conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
+                    existing = {r[1] for r in self._conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
                 except sqlite3.OperationalError:
-                    pass # Column already exists
+                    continue  # table missing entirely; executescript above should have made it
+                for col, coltype in cols.items():
+                    if col not in existing:
+                        try:
+                            self._conn.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coltype}")
+                            logger.info("Migrated %s: added column %s", tbl, col)
+                        except sqlite3.OperationalError:
+                            pass  # raced or already exists
 
     def _seed_defaults(self):
         """Create a default admin account on first run if no users exist."""
