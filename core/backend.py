@@ -7,7 +7,7 @@ import threading
 import base64
 import hashlib
 import numpy as np
-from typing import Optional
+from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Response, Query, BackgroundTasks, File, UploadFile, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
@@ -454,6 +454,10 @@ class ClassCreateRequest(BaseModel):
     schedule: Optional[str] = None
     room: Optional[str] = None
     department: Optional[str] = None
+    units: Optional[int] = None
+    level: Optional[str] = None
+    semester: Optional[str] = None
+    departments: Optional[List[str]] = None
 
 class FacultyCreateRequest(BaseModel):
     name: str
@@ -565,11 +569,14 @@ def me(current_user=Depends(get_current_user)):
     return current_user
 
 @app.get("/api/users")
-def get_users(role: Optional[str] = None, current_user=Depends(require_roles("admin"))):
+def get_users(role: Optional[str] = None, current_user=Depends(require_roles("admin", "lecturer"))):
     return db.get_users(role)
 
 @app.post("/api/users")
-def create_user(req: UserCreateRequest, current_user=Depends(require_roles("admin"))):
+def create_user(req: UserCreateRequest, current_user=Depends(require_roles("admin", "lecturer"))):
+    # Lecturers may only create students (not other lecturers/admins)
+    if current_user["role"] == "lecturer" and req.role != "student":
+        raise HTTPException(status_code=403, detail="Lecturers can only create students")
     try:
         user_id = db.create_user(
             username=req.username,
@@ -722,7 +729,11 @@ def create_class(req: ClassCreateRequest, lecturer_id: int, current_user=Depends
         lecturer_id=lecturer_id,
         schedule=req.schedule,
         room=req.room,
-        department=req.department
+        department=req.department,
+        units=req.units,
+        level=req.level,
+        semester=req.semester,
+        departments=req.departments
     )
     return {"id": class_id}
 

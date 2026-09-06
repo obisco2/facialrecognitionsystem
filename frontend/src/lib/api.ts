@@ -127,6 +127,10 @@ export interface SchoolClass {
   schedule?: string | null
   room?: string | null
   department?: string | null
+  units?: number | null
+  level?: string | null
+  semester?: string | null
+  departments?: string[]
   faculty_name?: string | null
   lecturer_name?: string | null
   enrolled_count?: number
@@ -222,11 +226,20 @@ export const getClasses = (lecturerId?: number, filters: Omit<ClassFilters, 'lec
   get<SchoolClass[]>(`/classes${classQuery({ ...filters, lecturerId })}`)
 export const browseClasses = (filters: Omit<ClassFilters, 'lecturerId'> = {}) =>
   get<SchoolClass[]>(`/classes/browse${classQuery(filters)}`)
-export const createClass = (
-  lecturerId: number,
-  data: { name: string; code: string; schedule?: string; room?: string; department?: string },
-) => post<{ id: number }>(`/classes?lecturer_id=${lecturerId}`, data)
-export const updateClass = (id: number, data: Partial<SchoolClass>) => put<{ status: string }>(`/classes/${id}`, data)
+export interface ClassCreatePayload {
+  name: string
+  code: string
+  schedule?: string
+  room?: string
+  department?: string
+  units?: number
+  level?: string
+  semester?: string
+  departments?: string[]
+}
+export const createClass = (lecturerId: number, data: ClassCreatePayload) =>
+  post<{ id: number }>(`/classes?lecturer_id=${lecturerId}`, data)
+export const updateClass = (id: number, data: Partial<ClassCreatePayload>) => put<{ status: string }>(`/classes/${id}`, data)
 export const deleteClass = (id: number) => del<{ status: string }>(`/classes/${id}`)
 
 export const getClassEnrollments = (classId: number) =>

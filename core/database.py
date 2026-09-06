@@ -56,8 +56,22 @@ CREATE TABLE IF NOT EXISTS classes (
     schedule    TEXT,
     room        TEXT,
     department  TEXT,
+    units       INTEGER,
+    level       TEXT,
+    semester    TEXT,
     created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Courses can be offered to multiple departments (many-to-many).
+-- A course assigned to no departments is visible to admin/lecturer only.
+CREATE TABLE IF NOT EXISTS class_departments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    class_id      INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
+    UNIQUE(class_id, department_id)
+);
+CREATE INDEX IF NOT EXISTS idx_class_dept_class ON class_departments(class_id);
+CREATE INDEX IF NOT EXISTS idx_class_dept_dept ON class_departments(department_id);
 
 CREATE TABLE IF NOT EXISTS enrollments (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,7 +216,7 @@ class DatabaseManager:
                     "emergency_pin_hash": "TEXT",
                 },
                 "students": {"faculty": "VARCHAR(100)"},
-                "classes": {"department": "TEXT"},
+                "classes": {"department": "TEXT", "units": "INTEGER", "level": "TEXT", "semester": "TEXT"},
             }
             for tbl, cols in expected.items():
                 try:
@@ -307,6 +321,41 @@ class DatabaseManager:
                         for dept in depts:
                             self._conn.execute("INSERT OR IGNORE INTO departments (faculty_id, name) VALUES (?, ?)", (fac_id, dept))
             logger.info("Default UNILAG faculties and departments seeded successfully")
+
+        # Seed the CPE/EEG engineering curriculum as course catalog entries (idempotent).
+        self._seed_curriculum()
+
+    def _seed_curriculum(self):
+        """Idempotently seed CPE & EEG courses from the UNILAG old curriculum.
+
+        Courses become `classes` rows (courses == classes in this system). Each is
+        linked to the department(s) that offer it via class_departments. Skipped if
+        the code already exists so admin edits are preserved.
+        """
+        try:
+            from core.curriculum import CURRICULUM
+        except Exception as e:  # pragma: no cover - optional data module
+            logger.warning("Curriculum module unavailable (%s); skipping seed", e)
+            return
+        seeds = 0
+        with self._conn:
+            for code, name, units, level, semester, departments in CURRICULUM:
+                exists = self._conn.execute(
+                    "SELECT id FROM classes WHERE code = ?", (code,)
+                ).fetchone()
+                if exists:
+                    # ensure department links exist even for pre-existing rows
+                    self._set_class_departments(exists[0], departments)
+                    continue
+                cur = self._conn.execute(
+                    """INSERT INTO classes (name, code, lecturer_id, department, units, level, semester)
+                       VALUES (?, ?, NULL, ?, ?, ?, ?)""",
+                    (name, code, departments[0] if departments else None, units, level, semester),
+                )
+                self._set_class_departments(cur.lastrowid, departments)
+                seeds += 1
+        if seeds:
+            logger.info("Seeded %d curriculum courses (CPE/EEG)", seeds)
 
     def _row_to_dict(self, row) -> dict:
         return dict(row) if row else None
@@ -546,15 +595,50 @@ class DatabaseManager:
     # ------------------------------------------------------------------ #
 
     def create_class(self, name: str, code: str, lecturer_id: int,
-                     schedule: str = None, room: str = None, department: str = None) -> int:
+                     schedule: str = None, room: str = None, department: str = None,
+                     units: int = None, level: str = None, semester: str = None,
+                     departments: list = None) -> int:
+        # Keep legacy single department in sync with the first offered department
+        if not department and departments:
+            department = departments[0]
         with self._conn:
             cur = self._conn.execute(
-                """INSERT INTO classes (name, code, lecturer_id, schedule, room, department)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (name, code, lecturer_id, schedule, room, department),
+                """INSERT INTO classes (name, code, lecturer_id, schedule, room, department, units, level, semester)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (name, code, lecturer_id, schedule, room, department, units, level, semester),
             )
+            class_id = cur.lastrowid
+            self._set_class_departments(class_id, departments)
         logger.info("Created class '%s' (%s) for lecturer id=%d", name, code, lecturer_id)
-        return cur.lastrowid
+        return class_id
+
+    def _set_class_departments(self, class_id: int, departments: list):
+        """Replace the department list of a class. departments is a list of dept names."""
+        self._conn.execute("DELETE FROM class_departments WHERE class_id = ?", (class_id,))
+        if not departments:
+            return
+        for dept in departments:
+            row = self._conn.execute(
+                "SELECT id FROM departments WHERE name = ?", (dept.strip(),)
+            ).fetchone()
+            if row:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO class_departments (class_id, department_id) VALUES (?, ?)",
+                    (class_id, row["id"]),
+                )
+            else:
+                # Unknown department: fall back to storing the name on the class row
+                self._conn.execute("UPDATE classes SET department = ? WHERE id = ?", (dept.strip(), class_id))
+
+    def get_class_departments(self, class_id: int) -> list:
+        """Return list of department names offering a class/course."""
+        rows = self._conn.execute(
+            """SELECT d.id, d.name FROM class_departments cd
+               JOIN departments d ON cd.department_id = d.id
+               WHERE cd.class_id = ? ORDER BY d.name""",
+            (class_id,),
+        ).fetchall()
+        return self._rows_to_list(rows)
 
     def get_class(self, class_id: int) -> dict | None:
         row = self._conn.execute(
@@ -591,20 +675,40 @@ class DatabaseManager:
                 ORDER BY c.code""",
             tuple(params),
         ).fetchall()
-        return self._rows_to_list(rows)
+        return self._attach_departments(self._rows_to_list(rows))
 
     def get_browse_classes(self, student_id: int, department: str = None, faculty_id: int = None) -> list:
-        """All classes with per-student enrolled flag, for course registration."""
-        clauses, params = [], []
+        """Courses for registration, auto-scoped to the student's department by default.
+
+        When no explicit filter is given and the student has a department, only
+        classes offered to that department (matched via class_departments or the
+        legacy single `department` column) are returned.
+        """
+        filters = []
         if department:
-            clauses.append("c.department = ?")
+            filters.append("c.department = ?")
+        if faculty_id:
+            filters.append("d.faculty_id = ?")
+
+        student = self.get_user(student_id)
+        student_dept = (student or {}).get("department")
+
+        # Scope to the student's own department unless they asked for a wider view.
+        if not department and not faculty_id and student_dept:
+            filters.append(
+                "(c.department = ? OR EXISTS(SELECT 1 FROM class_departments cd JOIN departments dd "
+                "ON cd.department_id = dd.id WHERE cd.class_id = c.id AND dd.name = ?))"
+            )
+
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params = [student_id]
+        if department:
             params.append(department)
         if faculty_id:
-            clauses.append("d.faculty_id = ?")
             params.append(faculty_id)
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        # NOTE: student_id placeholder comes first (SELECT clause precedes WHERE)
-        params = [student_id, *params]
+        if not department and not faculty_id and student_dept:
+            params.extend([student_dept, student_dept])
+
         rows = self._conn.execute(
             f"""SELECT c.*, u.full_name AS lecturer_name,
                        f.name AS faculty_name,
@@ -622,17 +726,33 @@ class DatabaseManager:
         for r in self._rows_to_list(rows):
             r["is_enrolled"] = bool(r.pop("is_enrolled"))
             out.append(r)
-        return out
+        return self._attach_departments(out)
+
+    def _attach_departments(self, rows: list) -> list:
+        """Attach the department-name list to each class row."""
+        for r in rows:
+            depts = self.get_class_departments(r["id"])
+            r["departments"] = [d["name"] for d in depts]
+            if not r.get("departments") and r.get("department"):
+                r["departments"] = [r["department"]]
+        return rows
 
     def update_class(self, class_id: int, **fields) -> bool:
-        allowed = {"name", "code", "lecturer_id", "schedule", "room", "department"}
+        allowed = {"name", "code", "lecturer_id", "schedule", "room", "department", "units", "level", "semester"}
+        departments = fields.pop("departments", None)
         updates = {k: v for k, v in fields.items() if k in allowed}
-        if not updates:
+        if not updates and departments is None:
             return False
-        cols = ", ".join(f"{k} = ?" for k in updates)
-        vals = list(updates.values()) + [class_id]
+        if departments:
+            # keep legacy single-column department in sync with first offered
+            updates["department"] = departments[0]
         with self._conn:
-            self._conn.execute(f"UPDATE classes SET {cols} WHERE id = ?", vals)
+            if updates:
+                cols = ", ".join(f"{k} = ?" for k in updates)
+                vals = list(updates.values()) + [class_id]
+                self._conn.execute(f"UPDATE classes SET {cols} WHERE id = ?", vals)
+            if departments is not None:
+                self._set_class_departments(class_id, departments)
         return True
 
     def delete_class(self, class_id: int) -> bool:
@@ -687,7 +807,7 @@ class DatabaseManager:
                ORDER BY c.code""",
             (student_id,),
         ).fetchall()
-        return self._rows_to_list(rows)
+        return self._attach_departments(self._rows_to_list(rows))
 
     def get_roster(self, lecturer_id: int = None) -> list:
         """Students with the courses they take. Scoped to a lecturer's
@@ -1098,7 +1218,7 @@ class DatabaseManager:
 
     def get_unassigned_classes(self) -> list:
         rows = self._conn.execute("SELECT * FROM classes WHERE lecturer_id IS NULL ORDER BY code").fetchall()
-        return self._rows_to_list(rows)
+        return self._attach_departments(self._rows_to_list(rows))
 
     # ------------------------------------------------------------------ #
     #  Security Q / emergency PIN (hashed, admin-opaque)                    #

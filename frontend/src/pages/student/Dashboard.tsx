@@ -1,14 +1,13 @@
-import { useMemo, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { CheckCircle2, ScanFace, AlertTriangle, BookOpen, Plus, X } from 'lucide-react'
+import { CheckCircle2, ScanFace, AlertTriangle, BookOpen, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, Thead, Tbody, Tr, Td } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import { getStudentAttendance, getStudentSummary, browseClasses, enrollStudent, unenrollStudent, getFaculties, getDepartments } from '@/lib/api'
+import { getStudentAttendance, getStudentSummary } from '@/lib/api'
 import type { AttendanceRecord } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { showToast } from '@/components/ui/toast'
 
 function greeting() {
   const h = new Date().getHours()
@@ -34,7 +33,6 @@ function classStatus(percent: number) {
 
 export default function StudentDashboard() {
   const { user } = useAuth()
-  const qc = useQueryClient()
 
   const { data: records } = useQuery({
     queryKey: ['student-attendance', user?.full_name],
@@ -46,51 +44,6 @@ export default function StudentDashboard() {
     queryKey: ['student-summary', user?.id],
     queryFn: () => getStudentSummary(user!.id),
     enabled: !!user,
-  })
-
-  // Course catalog filters
-  const [facultyId, setFacultyId] = useState<number | ''>('')
-  const [department, setDepartment] = useState('')
-
-  const { data: faculties } = useQuery({
-    queryKey: ['faculties'],
-    queryFn: getFaculties,
-    enabled: !!user,
-  })
-  const { data: departments } = useQuery({
-    queryKey: ['departments', facultyId || 'all'],
-    queryFn: () => getDepartments(facultyId === '' ? undefined : facultyId),
-    enabled: !!user,
-  })
-
-  // Fetch course catalog for registration (all classes + enrolled flag)
-  const { data: allClasses } = useQuery({
-    queryKey: ['classes', 'browse', facultyId || 'all', department || 'all'],
-    queryFn: () => browseClasses({
-      facultyId: facultyId === '' ? undefined : facultyId,
-      department: department || undefined,
-    }),
-    enabled: !!user,
-  })
-
-  const enrollMut = useMutation({
-    mutationFn: (classId: number) => enrollStudent(classId, user!.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['classes', 'browse'] })
-      qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
-      showToast('success', 'Successfully registered for class')
-    },
-    onError: (err: Error) => showToast('error', err.message || 'Failed to register'),
-  })
-
-  const unenrollMut = useMutation({
-    mutationFn: (classId: number) => unenrollStudent(classId, user!.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['classes', 'browse'] })
-      qc.invalidateQueries({ queryKey: ['student-summary', user?.id] })
-      showToast('success', 'Unregistered from class')
-    },
-    onError: (err: Error) => showToast('error', err.message || 'Failed to unregister'),
   })
 
   const distinctClasses = useMemo(() => {
@@ -255,81 +208,26 @@ export default function StudentDashboard() {
         </Card>
       )}
 
-      {/* Course Registration */}
+      {/* Link to Courses */}
       <Card className="mb-6">
-        <CardHeader>
-          <CardTitle>Course Registration</CardTitle>
-          <p className="text-sm text-ink-3">Select the courses you are offering this semester.</p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <select
-              value={facultyId}
-              onChange={(e) => {
-                setFacultyId(e.target.value === '' ? '' : Number(e.target.value))
-                setDepartment('')
-              }}
-              className="h-10 flex-1 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
-              aria-label="Filter by faculty"
-            >
-              <option value="">All faculties</option>
-              {faculties?.map((f) => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-              ))}
-            </select>
-            <select
-              value={department}
-              onChange={(e) => setDepartment(e.target.value)}
-              className="h-10 flex-1 rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
-              aria-label="Filter by department"
-            >
-              <option value="">All departments</option>
-              {departments?.map((d) => (
-                <option key={d.id} value={d.name}>{d.name}</option>
-              ))}
-            </select>
+        <CardContent className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-accent-tint text-accent">
+              <BookOpen className="size-5" />
+            </div>
+            <div>
+              <p className="font-mono-label text-ink-3">Manage your semester courses</p>
+              <p className="text-sm text-ink">
+                View your enrolled courses and add courses offered in your department.
+              </p>
+            </div>
           </div>
-          {!allClasses ? (
-            <p className="text-sm text-ink-3">Loading classes...</p>
-          ) : allClasses.length === 0 ? (
-            <p className="text-sm text-ink-3">No classes match these filters.</p>
-          ) : (
-            allClasses.map((cls) => {
-              const isEnrolled = cls.is_enrolled ?? summary?.some((s) => s.class_id === cls.id)
-              return (
-                <div key={cls.id} className="flex items-center justify-between gap-4 p-3 rounded-md bg-paper-2 border border-paper-3">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-mono-label text-accent">{cls.code}</span>
-                      <span className="truncate text-sm font-medium text-ink">{cls.name}</span>
-                    </div>
-                    <p className="text-xs text-ink-3">
-                      {[cls.department, cls.faculty_name].filter(Boolean).join('  ·  ') || '—'}
-                      {cls.lecturer_name ? `  ·  ${cls.lecturer_name}` : ''}
-                      {typeof cls.enrolled_count === 'number' ? `  ·  ${cls.enrolled_count} registered` : ''}
-                    </p>
-                  </div>
-                  {isEnrolled ? (
-                    <button
-                      onClick={() => unenrollMut.mutate(cls.id)}
-                      disabled={unenrollMut.isPending}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-danger bg-danger-tint rounded-md hover:opacity-80 transition-opacity disabled:opacity-50"
-                    >
-                      <X className="size-3.5" /> Remove
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => enrollMut.mutate(cls.id)}
-                      disabled={enrollMut.isPending}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-accent bg-accent-tint rounded-md hover:opacity-80 transition-opacity disabled:opacity-50"
-                    >
-                      <Plus className="size-3.5" /> Add Course
-                    </button>
-                  )}
-                </div>
-              )
-            })
-          )}
+          <Link
+            to="/student/courses"
+            className="flex shrink-0 items-center gap-1 px-3 py-2 text-sm font-semibold text-accent hover:opacity-80"
+          >
+            Go to Courses <ArrowRight className="size-4" />
+          </Link>
         </CardContent>
       </Card>
 

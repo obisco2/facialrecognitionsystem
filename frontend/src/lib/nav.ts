@@ -24,6 +24,7 @@ export const NAV_BY_ROLE: Record<Role, NavItem[]> = {
   ],
   student: [
     { id: 'dashboard', label: 'Dashboard', to: '/student', icon: 'LayoutDashboard' },
+    { id: 'courses', label: 'Courses', to: '/student/courses', icon: 'BookOpen' },
     { id: 'enrollment', label: 'Enrollment', to: '/student/enrollment', icon: 'ScanFace' },
     { id: 'settings', label: 'Settings', to: '/student/settings', icon: 'Settings' },
   ],

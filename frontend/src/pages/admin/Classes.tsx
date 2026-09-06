@@ -28,7 +28,17 @@ export default function AdminClasses() {
   const { user } = useAuth()
   const [createOpen, setCreateOpen] = useState(false)
   const [manageId, setManageId] = useState<number | null>(null)
-  const [form, setForm] = useState({ name: '', code: '', schedule: '', room: '', lecturerId: '', department: '' })
+  const [form, setForm] = useState({
+    name: '',
+    code: '',
+    schedule: '',
+    room: '',
+    lecturerId: '',
+    department: '',
+    units: '',
+    level: '',
+    semester: '',
+  })
 
   const { data: classes } = useQuery({ queryKey: ['classes'], queryFn: () => getClasses() })
   const { data: unassigned } = useQuery({ queryKey: ['unassigned'], queryFn: getUnassigned })
@@ -48,11 +58,14 @@ export default function AdminClasses() {
         schedule: form.schedule || undefined,
         room: form.room || undefined,
         department: form.department || undefined,
+        units: form.units === '' ? undefined : Number(form.units),
+        level: form.level || undefined,
+        semester: form.semester || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['classes'] })
       setCreateOpen(false)
-      setForm({ name: '', code: '', schedule: '', room: '', lecturerId: '', department: '' })
+      setForm({ name: '', code: '', schedule: '', room: '', lecturerId: '', department: '', units: '', level: '', semester: '' })
       showToast('success', 'Class created')
     },
     onError: (err: Error) => showToast('error', err.message || 'Failed to create class'),
@@ -92,6 +105,8 @@ export default function AdminClasses() {
           <th>Name</th>
           <th>Code</th>
           <th>Department</th>
+          <th>Level</th>
+          <th>Units</th>
           <th>Lecturer</th>
           <th>Room</th>
           <th />
@@ -101,7 +116,11 @@ export default function AdminClasses() {
             <Tr key={c.id}>
               <Td className="font-medium text-ink">{c.name}</Td>
               <Td className="font-mono-label">{c.code}</Td>
-              <Td className="text-xs text-ink-2 max-w-[140px] truncate">{c.department || '—'}</Td>
+              <Td className="text-xs text-ink-2 max-w-[160px] truncate">
+                {(c.departments?.length ? c.departments : c.department ? [c.department] : []).join(', ') || '—'}
+              </Td>
+              <Td>{c.level ? `${c.level}L` : '—'}</Td>
+              <Td>{c.units ?? '—'}</Td>
               <Td>{lecturers?.find((l) => l.id === c.lecturer_id)?.full_name ?? '—'}</Td>
               <Td>{c.room ?? '—'}</Td>
               <Td>
@@ -122,7 +141,7 @@ export default function AdminClasses() {
           ))}
           {classes?.length === 0 && (
             <Tr>
-              <Td colSpan={6} className="py-8 text-center text-ink-3">
+              <Td colSpan={8} className="py-8 text-center text-ink-3">
                 No classes yet.
               </Td>
             </Tr>
@@ -153,20 +172,50 @@ export default function AdminClasses() {
               </option>
             ))}
           </select>
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              type="number"
+              min={0}
+              placeholder="Units"
+              value={form.units}
+              onChange={(e) => setForm({ ...form, units: e.target.value })}
+            />
+            <select
+              value={form.level}
+              onChange={(e) => setForm({ ...form, level: e.target.value })}
+              className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+            >
+              <option value="">Level…</option>
+              {['100', '200', '300', '400', '500'].map((l) => (
+                <option key={l} value={l}>{l}00</option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <select
+              value={form.semester}
+              onChange={(e) => setForm({ ...form, semester: e.target.value })}
+              className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+            >
+              <option value="">Semester…</option>
+              <option value="1st">First semester</option>
+              <option value="2nd">Second semester</option>
+            </select>
+            <select
+              value={form.department}
+              onChange={(e) => setForm({ ...form, department: e.target.value })}
+              className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+            >
+              <option value="">Department (optional)…</option>
+              {departments?.map((d) => (
+                <option key={d.id} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <Input placeholder="Schedule (optional)" value={form.schedule} onChange={(e) => setForm({ ...form, schedule: e.target.value })} />
           <Input placeholder="Room (optional)" value={form.room} onChange={(e) => setForm({ ...form, room: e.target.value })} />
-          <select
-            value={form.department}
-            onChange={(e) => setForm({ ...form, department: e.target.value })}
-            className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
-          >
-            <option value="">Select Department (optional)…</option>
-            {departments?.map((d) => (
-              <option key={d.id} value={d.name}>
-                {d.name}
-              </option>
-            ))}
-          </select>
           <Button type="submit" className="w-full" loading={createMut.isPending}>
             Create class
           </Button>

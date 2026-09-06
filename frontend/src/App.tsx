@@ -14,6 +14,7 @@ import LecturerStudents from '@/pages/lecturer/Students'
 import LiveSession from '@/pages/lecturer/LiveSession'
 import LecturerHistory from '@/pages/lecturer/History'
 import StudentDashboard from '@/pages/student/Dashboard'
+import StudentCourses from '@/pages/student/Courses'
 import StudentEnrollment from '@/pages/student/Enrollment'
 import StudentSettings from '@/pages/student/Settings'
 import { ToastContainer } from '@/components/ui/toast'
@@ -54,6 +55,7 @@ export default function App() {
         <Route element={<ProtectedRoute role="student" />}>
           <Route element={<AppShell />}>
             <Route path="/student" element={<StudentDashboard />} />
+            <Route path="/student/courses" element={<StudentCourses />} />
             <Route path="/student/enrollment" element={<StudentEnrollment />} />
             <Route path="/student/settings" element={<StudentSettings />} />
           </Route>
