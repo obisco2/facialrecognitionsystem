@@ -24,7 +24,9 @@ frontend/dist/
 *.db-journal
 *.db-wal
 *.db-shm
-data/users.db
+
+# The primary application database is tracked for multi-machine sync.
+!data/users.db
 
 # Private student data & local exports
 data/known_faces/
