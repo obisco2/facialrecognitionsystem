@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Users as UsersIcon, X, Ban, ShieldOff, UserPlus } from 'lucide-react'
+import { Plus, Trash2, Users as UsersIcon, X, Ban, ShieldOff, UserPlus, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog } from '@/components/ui/dialog'
@@ -28,6 +28,7 @@ export default function AdminClasses() {
   const { user } = useAuth()
   const [createOpen, setCreateOpen] = useState(false)
   const [manageId, setManageId] = useState<number | null>(null)
+  const [search, setSearch] = useState('')
   const [form, setForm] = useState({
     name: '',
     code: '',
@@ -49,6 +50,18 @@ export default function AdminClasses() {
   })
   const { data: lecturers } = useQuery({ queryKey: ['users', 'lecturer'], queryFn: () => getUsers('lecturer') })
   const { data: departments } = useQuery({ queryKey: ['departments'], queryFn: () => getDepartments() })
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return classes ?? []
+    return (classes ?? []).filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.department ?? '').toLowerCase().includes(q) ||
+        (c.departments ?? []).some((d) => d.toLowerCase().includes(q)),
+    )
+  }, [classes, search])
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -100,6 +113,10 @@ export default function AdminClasses() {
         </div>
       )}
 
+      <div className="mb-4 max-w-sm">
+        <Input icon={<Search className="size-4" />} placeholder="Search courses by name, code or department…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      </div>
+
       <Table>
         <Thead>
           <th>Name</th>
@@ -112,7 +129,7 @@ export default function AdminClasses() {
           <th />
         </Thead>
         <Tbody>
-          {classes?.map((c) => (
+          {filtered.map((c) => (
             <Tr key={c.id}>
               <Td className="font-medium text-ink">{c.name}</Td>
               <Td className="font-mono-label">{c.code}</Td>
@@ -139,10 +156,10 @@ export default function AdminClasses() {
               </Td>
             </Tr>
           ))}
-          {classes?.length === 0 && (
+          {filtered.length === 0 && (
             <Tr>
               <Td colSpan={8} className="py-8 text-center text-ink-3">
-                No classes yet.
+                No classes match your search.
               </Td>
             </Tr>
           )}
