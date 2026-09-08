@@ -681,12 +681,13 @@ class DatabaseManager:
         ).fetchall()
         return self._attach_departments(self._rows_to_list(rows))
 
-    def get_browse_classes(self, student_id: int, department: str = None, faculty_id: int = None) -> list:
+    def get_browse_classes(self, student_id: int, department: str = None, faculty_id: int = None, all_courses: bool = False) -> list:
         """Courses for registration, auto-scoped to the student's department by default.
 
         When no explicit filter is given and the student has a department, only
         classes offered to that department (matched via class_departments or the
-        legacy single `department` column) are returned.
+        legacy single `department` column) are returned. Pass all_courses=True
+        to see every class regardless of the student's department.
         """
         filters = []
         if department:
@@ -698,7 +699,7 @@ class DatabaseManager:
         student_dept = (student or {}).get("department")
 
         # Scope to the student's own department unless they asked for a wider view.
-        if not department and not faculty_id and student_dept:
+        if not all_courses and not department and not faculty_id and student_dept:
             filters.append(
                 "(c.department = ? OR EXISTS(SELECT 1 FROM class_departments cd JOIN departments dd "
                 "ON cd.department_id = dd.id WHERE cd.class_id = c.id AND dd.name = ?))"
@@ -710,7 +711,7 @@ class DatabaseManager:
             params.append(department)
         if faculty_id:
             params.append(faculty_id)
-        if not department and not faculty_id and student_dept:
+        if not all_courses and not department and not faculty_id and student_dept:
             params.extend([student_dept, student_dept])
 
         rows = self._conn.execute(
