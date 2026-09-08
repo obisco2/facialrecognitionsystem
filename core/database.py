@@ -396,6 +396,10 @@ class DatabaseManager:
                 raise ValueError("Matric number (Student ID) is required for students.")
             if not email or not email.strip():
                 raise ValueError("Email address is required for students.")
+            if not faculty or not faculty.strip():
+                raise ValueError("Faculty is required for students.")
+            if not department or not department.strip():
+                raise ValueError("Department is required for students.")
             username = student_id.strip()
 
         # Check for duplicate username

@@ -143,6 +143,13 @@ export function AppShell() {
             <span className="hidden sm:inline">Jump to…</span>
             <kbd className="font-mono-label rounded border border-rule px-1 py-0.5">⌘K</kbd>
           </button>
+          <button
+            onClick={() => setLogoutConfirmOpen(true)}
+            className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-danger/30 px-3 py-1.5 text-sm text-danger hover:bg-danger hover:text-white"
+          >
+            <LogOut className="size-3.5" />
+            <span className="hidden sm:inline">Log out</span>
+          </button>
         </header>
         <main className="flex-1 overflow-y-auto p-4 md:p-6">
           <Outlet />

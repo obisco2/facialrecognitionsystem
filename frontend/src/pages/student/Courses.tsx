@@ -1,20 +1,26 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, X, GraduationCap, Layers } from 'lucide-react'
+import { Plus, X, GraduationCap, Layers, Search, BookMarked, Globe } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { browseClasses, enrollStudent, unenrollStudent, getStudentSummary } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showToast } from '@/components/ui/toast'
+import { cn } from '@/lib/utils'
 
 const LEVELS = ['100', '200', '300', '400', '500']
+
+type CatalogTab = 'department' | 'all'
 
 export default function StudentCourses() {
   const { user } = useAuth()
   const qc = useQueryClient()
 
+  const [tab, setTab] = useState<CatalogTab>('department')
   const [levelFilter, setLevelFilter] = useState('')
   const [semesterFilter, setSemesterFilter] = useState('')
+  const [search, setSearch] = useState('')
 
   const { data: summary } = useQuery({
     queryKey: ['student-summary', user?.id],
@@ -22,10 +28,11 @@ export default function StudentCourses() {
     enabled: !!user,
   })
 
-  // Catalog is auto-scoped to the student's department by the backend.
+  // "My department" tab is auto-scoped to the student's department by the backend.
+  // "All courses" tab requests the full catalog via scope=all.
   const { data: catalog } = useQuery({
-    queryKey: ['classes', 'browse', 'student', user?.id],
-    queryFn: () => browseClasses(),
+    queryKey: ['classes', 'browse', 'student', user?.id, tab],
+    queryFn: () => browseClasses(tab === 'all' ? { scope: 'all' } : {}),
     enabled: !!user,
   })
 
@@ -56,10 +63,20 @@ export default function StudentCourses() {
 
   const available = useMemo(() => {
     let list = catalog ?? []
+    const q = search.trim().toLowerCase()
+    if (q) {
+      list = list.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          c.code.toLowerCase().includes(q) ||
+          (c.department ?? '').toLowerCase().includes(q) ||
+          (c.departments ?? []).some((d) => d.toLowerCase().includes(q)),
+      )
+    }
     if (levelFilter) list = list.filter((c) => c.level === levelFilter)
     if (semesterFilter) list = list.filter((c) => c.semester === semesterFilter)
     return list
-  }, [catalog, levelFilter, semesterFilter])
+  }, [catalog, levelFilter, semesterFilter, search])
 
   const levelsPresent = useMemo(
     () => Array.from(new Set((catalog ?? []).map((c) => c.level).filter(Boolean))) as string[],
@@ -81,7 +98,7 @@ export default function StudentCourses() {
       <div className="mb-6">
         <h1 className="mb-1">My courses</h1>
         <p className="text-sm text-ink-3">
-          Courses offered in your department{user?.department ? ` · ${user.department}` : ''}. Add them to attend sessions.
+          Add your courses to attend sessions. Browse your department's courses or search the full catalog.
         </p>
       </div>
 
@@ -147,12 +164,42 @@ export default function StudentCourses() {
         <CardHeader>
           <CardTitle>Course catalog</CardTitle>
           <p className="text-sm text-ink-3">
-            {user?.department
-              ? `Showing courses for ${user.department}.`
-              : 'Showing all courses your account can access.'}
+            {tab === 'department'
+              ? `Showing courses for ${user?.department ?? 'your account'}. Use the "All courses" tab to search the full catalog.`
+              : 'Browse and search every available course, then add the ones you need.'}
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1 border-b border-rule">
+              <button
+                onClick={() => setTab('department')}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium',
+                  tab === 'department' ? 'border-accent text-accent' : 'border-transparent text-ink-3 hover:text-ink',
+                )}
+              >
+                <BookMarked className="size-4" /> My department
+              </button>
+              <button
+                onClick={() => setTab('all')}
+                className={cn(
+                  'flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium',
+                  tab === 'all' ? 'border-accent text-accent' : 'border-transparent text-ink-3 hover:text-ink',
+                )}
+              >
+                <Globe className="size-4" /> All courses
+              </button>
+            </div>
+            <div className="min-w-0 flex-1">
+              <Input
+                icon={<Search className="size-4" />}
+                placeholder="Search by course name, code or department…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <select
               value={levelFilter}

@@ -228,12 +228,14 @@ export interface ClassFilters {
   lecturerId?: number
   department?: string
   facultyId?: number
+  scope?: 'all'
 }
 function classQuery(f: ClassFilters = {}) {
   const q = new URLSearchParams()
   if (f.lecturerId) q.set('lecturer_id', String(f.lecturerId))
   if (f.department) q.set('department', f.department)
   if (f.facultyId) q.set('faculty_id', String(f.facultyId))
+  if (f.scope) q.set('scope', f.scope)
   const s = q.toString()
   return s ? `?${s}` : ''
 }

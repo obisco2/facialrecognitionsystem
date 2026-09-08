@@ -430,8 +430,9 @@ export default function AdminUsers() {
                 value={form.faculty}
                 onChange={(e) => setForm({ ...form, faculty: e.target.value, department: '' })}
                 className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+                required={form.role === 'student'}
               >
-                <option value="">Select Faculty…</option>
+                <option value="">{form.role === 'student' ? 'Select Faculty *' : 'Select Faculty…'}</option>
                 {faculties?.map((f) => (
                   <option key={f.id} value={f.name}>{f.name}</option>
                 ))}
@@ -441,8 +442,9 @@ export default function AdminUsers() {
                 onChange={(e) => setForm({ ...form, department: e.target.value })}
                 className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
                 disabled={!form.faculty}
+                required={form.role === 'student'}
               >
-                <option value="">Select Department…</option>
+                <option value="">{form.role === 'student' ? 'Select Department *' : 'Select Department…'}</option>
                 {departments
                   ?.filter((d) => {
                     const matchedFaculty = faculties?.find((fac) => fac.name === form.faculty)

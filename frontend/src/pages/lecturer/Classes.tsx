@@ -28,6 +28,7 @@ export default function LecturerClasses() {
   const [createOpen, setCreateOpen] = useState(false)
   const [manageId, setManageId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [uSearch, setUSearch] = useState('')
   const [form, setForm] = useState({
     name: '',
     code: '',
@@ -94,6 +95,18 @@ export default function LecturerClasses() {
 
   const { data: unassigned } = useQuery({ queryKey: ['unassigned'], queryFn: getUnassigned })
 
+  const filteredUnassigned = useMemo(() => {
+    const q = uSearch.trim().toLowerCase()
+    if (!q) return unassigned ?? []
+    return (unassigned ?? []).filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.department ?? '').toLowerCase().includes(q) ||
+        (c.departments ?? []).some((d) => d.toLowerCase().includes(q)),
+    )
+  }, [unassigned, uSearch])
+
   const assignMut = useMutation({
     mutationFn: (classId: number) => assignSelf(classId, user!.id),
     onSuccess: () => {
@@ -120,17 +133,36 @@ export default function LecturerClasses() {
 
       {unassigned && unassigned.length > 0 && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3">
-          <p className="mb-2 text-sm font-medium text-amber-900">Unassigned courses — claim one:</p>
-          <div className="flex flex-wrap gap-2">
-            {unassigned.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => assignMut.mutate(c.id)}
-                className="rounded border border-amber-300 bg-white px-3 py-1 text-sm hover:bg-amber-100"
-              >
-                <UserPlus className="mr-1 inline size-3" /> {c.code} — {c.name}
-              </button>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-amber-900">
+              Unassigned courses ({unassigned.length}) — claim one:
+            </p>
+            <div className="w-56">
+              <Input
+                icon={<Search className="size-4" />}
+                placeholder="Search unassigned…"
+                value={uSearch}
+                onChange={(e) => setUSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-y-auto">
+            {filteredUnassigned.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-2 rounded border border-amber-300 bg-white px-3 py-1.5 text-sm">
+                <span className="min-w-0 truncate">
+                  <span className="font-mono-label text-amber-800">{c.code}</span> — {c.name}
+                </span>
+                <button
+                  onClick={() => assignMut.mutate(c.id)}
+                  className="flex shrink-0 items-center gap-1 rounded bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-200"
+                >
+                  <UserPlus className="size-3" /> Claim
+                </button>
+              </div>
             ))}
+            {filteredUnassigned.length === 0 && (
+              <p className="py-2 text-center text-xs text-amber-700">No unassigned courses match.</p>
+            )}
           </div>
         </div>
       )}

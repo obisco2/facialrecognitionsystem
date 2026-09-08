@@ -659,10 +659,16 @@ def get_classes(lecturer_id: Optional[int] = None, department: Optional[str] = N
 
 @app.get("/api/classes/browse")
 def browse_classes(department: Optional[str] = None, faculty_id: Optional[int] = None,
+                   scope: Optional[str] = None,
                    current_user=Depends(get_current_user)):
-    """Course catalog for registration: all classes + is_enrolled flag + filters."""
+    """Course catalog for registration: all classes + is_enrolled flag + filters.
+
+    `scope=all` lets a student browse the full catalog instead of being
+    auto-scoped to their own department.
+    """
     if current_user["role"] == "student":
-        return db.get_browse_classes(current_user["id"], department=department, faculty_id=faculty_id)
+        return db.get_browse_classes(current_user["id"], department=department,
+                                     faculty_id=faculty_id, all_courses=scope == "all")
     return db.get_classes(department=department, faculty_id=faculty_id)
 
 @app.get("/api/classes/unassigned")

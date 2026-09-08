@@ -24,6 +24,8 @@ def db_with_user(db):
         role="student",
         full_name="Test Student",
         student_id="STU001",
+        department="Computer Engineering",
+        faculty="Faculty of Engineering",
     )
     return db, user_id
 
@@ -69,7 +71,8 @@ class TestPasswordHashing:
 class TestUserCreation:
     def test_create_user_returns_id(self, db):
         user_id = db.create_user("alice", "pass123", "student", "Alice Smith",
-                                 student_id="MAT001", email="alice@unilag.edu.ng")
+                                 student_id="MAT001", email="alice@unilag.edu.ng",
+                                 department="Computer Engineering", faculty="Faculty of Engineering")
         assert isinstance(user_id, int)
         assert user_id > 0
 
@@ -82,11 +85,9 @@ class TestUserCreation:
         assert user["title"] == "Dr."
 
     def test_create_duplicate_username_raises(self, db):
-        db.create_user("charlie", "pass", "student", "Charlie",
-                       student_id="MAT002", email="charlie@unilag.edu.ng")
+        db.create_user("charlie", "pass", "lecturer", "Charlie", title="Mr.")
         with pytest.raises(ValueError, match="already taken"):
-            db.create_user("charlie", "pass2", "student", "Charlie 2",
-                           student_id="MAT003", email="charlie2@unilag.edu.ng")
+            db.create_user("charlie", "pass2", "lecturer", "Charlie 2", title="Mr.")
 
     def test_create_student_requires_matric(self, db):
         with pytest.raises(ValueError, match="Matric number"):
@@ -98,7 +99,8 @@ class TestUserCreation:
 
     def test_create_student_creates_students_table_entry(self, db):
         user_id = db.create_user("dave", "pass", "student", "Dave Lee",
-                                 student_id="MAT005", email="dave@unilag.edu.ng")
+                                 student_id="MAT005", email="dave@unilag.edu.ng",
+                                 department="Computer Engineering", faculty="Faculty of Engineering")
         user = db.get_user(user_id)
         matric = user["student_id"]
         row = db._conn.execute(
@@ -114,29 +116,31 @@ class TestUserCreation:
 
 class TestAuthentication:
     def test_authenticate_by_username(self, db):
-        db.create_user("eve", "secret", "student", "Eve Davis",
-                       student_id="MAT010", email="eve@unilag.edu.ng")
+        db.create_user("eve", "secret", "lecturer", "Eve Davis", title="Dr.")
         result = db.authenticate("eve", "secret")
         assert result is not None
         assert result["username"] == "eve"
 
     def test_authenticate_by_matric_number(self, db):
         db.create_user("frank", "secret", "student", "Frank",
-                       student_id="MAT011", email="frank@unilag.edu.ng")
+                       student_id="MAT011", email="frank@unilag.edu.ng",
+                       department="Computer Engineering", faculty="Faculty of Engineering")
         result = db.authenticate("MAT011", "secret")
         assert result is not None
-        assert result["username"] == "frank"
+        assert result["username"] == "MAT011"
 
     def test_authenticate_by_email(self, db):
         db.create_user("grace", "secret", "student", "Grace",
-                       student_id="MAT012", email="grace@unilag.edu.ng")
+                       student_id="MAT012", email="grace@unilag.edu.ng",
+                       department="Computer Engineering", faculty="Faculty of Engineering")
         result = db.authenticate("grace@unilag.edu.ng", "secret")
         assert result is not None
-        assert result["username"] == "grace"
+        assert result["username"] == "MAT012"
 
     def test_authenticate_wrong_password(self, db):
         db.create_user("hank", "secret", "student", "Hank",
-                       student_id="MAT013", email="hank@unilag.edu.ng")
+                       student_id="MAT013", email="hank@unilag.edu.ng",
+                       department="Computer Engineering", faculty="Faculty of Engineering")
         result = db.authenticate("hank", "wrong")
         assert result is None
 
@@ -165,21 +169,24 @@ class TestAuthentication:
 class TestUserUpdates:
     def test_update_user_field(self, db):
         user_id = db.create_user("irene", "pass", "student", "Grace Hopper",
-                                 student_id="MAT020", email="irene@unilag.edu.ng")
+                                 student_id="MAT020", email="irene@unilag.edu.ng",
+                                 department="Computer Engineering", faculty="Faculty of Engineering")
         db.update_user(user_id, full_name="Grace Brewster")
         user = db.get_user(user_id)
         assert user["full_name"] == "Grace Brewster"
 
     def test_update_password(self, db):
         user_id = db.create_user("james", "old_pass", "student", "James",
-                                 student_id="MAT021", email="james@unilag.edu.ng")
+                                 student_id="MAT021", email="james@unilag.edu.ng",
+                                 department="Computer Engineering", faculty="Faculty of Engineering")
         db.update_password(user_id, "new_pass")
-        result = db.authenticate("james", "new_pass")
+        result = db.authenticate("MAT021", "new_pass")
         assert result is not None
 
     def test_delete_user(self, db):
         user_id = db.create_user("karen", "pass", "student", "Karen",
-                                 student_id="MAT022", email="karen@unilag.edu.ng")
+                                 student_id="MAT022", email="karen@unilag.edu.ng",
+                                 department="Computer Engineering", faculty="Faculty of Engineering")
         db.delete_user(user_id)
         user = db.get_user(user_id)
         assert user is None
@@ -213,7 +220,8 @@ class TestClassManagement:
 class TestEnrollment:
     def test_enroll_student(self, db):
         student_id = db.create_user("stu1", "pass", "student", "Student One",
-                                    student_id="MAT030", email="stu1@unilag.edu.ng")
+                                    student_id="MAT030", email="stu1@unilag.edu.ng",
+                                    department="Computer Engineering", faculty="Faculty of Engineering")
         lecturer_id = db.create_user("lec1", "pass", "lecturer", "Lecturer One")
         class_id = db.create_class("Class A", "CA101", lecturer_id)
         result = db.enroll_student(student_id, class_id)
@@ -221,7 +229,8 @@ class TestEnrollment:
 
     def test_enroll_duplicate_returns_false(self, db):
         student_id = db.create_user("stu2", "pass", "student", "Student Two",
-                                    student_id="MAT031", email="stu2@unilag.edu.ng")
+                                    student_id="MAT031", email="stu2@unilag.edu.ng",
+                                    department="Computer Engineering", faculty="Faculty of Engineering")
         lecturer_id = db.create_user("lec2", "pass", "lecturer", "Lecturer Two")
         class_id = db.create_class("Class B", "CB101", lecturer_id)
         db.enroll_student(student_id, class_id)
@@ -230,9 +239,11 @@ class TestEnrollment:
 
     def test_get_enrolled_students(self, db):
         s1 = db.create_user("s1", "pass", "student", "Alice",
-                             student_id="MAT032", email="s1@unilag.edu.ng")
+                             student_id="MAT032", email="s1@unilag.edu.ng",
+                             department="Computer Engineering", faculty="Faculty of Engineering")
         s2 = db.create_user("s2", "pass", "student", "Bob",
-                             student_id="MAT033", email="s2@unilag.edu.ng")
+                             student_id="MAT033", email="s2@unilag.edu.ng",
+                             department="Computer Engineering", faculty="Faculty of Engineering")
         lec = db.create_user("l1", "pass", "lecturer", "Dr. X")
         cid = db.create_class("Test", "T101", lec)
         db.enroll_student(s1, cid)
@@ -246,7 +257,8 @@ class TestEnrollment:
 class TestAttendance:
     def test_log_attendance(self, db):
         s = db.create_user("att1", "pass", "student", "Att Student",
-                            student_id="MAT040", email="att1@unilag.edu.ng")
+                            student_id="MAT040", email="att1@unilag.edu.ng",
+                            department="Computer Engineering", faculty="Faculty of Engineering")
         l = db.create_user("att_lec", "pass", "lecturer", "Att Lecturer")
         c = db.create_class("Att Class", "AC101", l)
         log_id = db.log_attendance(s, c, session_date="2026-01-15", method="face")
@@ -254,7 +266,8 @@ class TestAttendance:
 
     def test_log_attendance_duplicate_returns_none(self, db):
         s = db.create_user("att2", "pass", "student", "Att2",
-                            student_id="MAT041", email="att2@unilag.edu.ng")
+                            student_id="MAT041", email="att2@unilag.edu.ng",
+                            department="Computer Engineering", faculty="Faculty of Engineering")
         l = db.create_user("att_lec2", "pass", "lecturer", "Lec2")
         c = db.create_class("Att2", "AC201", l)
         db.log_attendance(s, c, session_date="2026-01-15")
@@ -263,7 +276,8 @@ class TestAttendance:
 
     def test_get_attendance(self, db):
         s = db.create_user("att3", "pass", "student", "Att3",
-                            student_id="MAT042", email="att3@unilag.edu.ng")
+                            student_id="MAT042", email="att3@unilag.edu.ng",
+                            department="Computer Engineering", faculty="Faculty of Engineering")
         l = db.create_user("att_lec3", "pass", "lecturer", "Lec3")
         c = db.create_class("Att3", "AC301", l)
         db.log_attendance(s, c, session_date="2026-01-15")
@@ -272,7 +286,8 @@ class TestAttendance:
 
     def test_get_attendance_summary(self, db):
         s = db.create_user("att4", "pass", "student", "Att4",
-                            student_id="MAT043", email="att4@unilag.edu.ng")
+                            student_id="MAT043", email="att4@unilag.edu.ng",
+                            department="Computer Engineering", faculty="Faculty of Engineering")
         l = db.create_user("att_lec4", "pass", "lecturer", "Lec4")
         c = db.create_class("Att4", "AC401", l)
         db.enroll_student(s, c)

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Users as UsersIcon, X, Ban, ShieldOff, UserPlus, Search } from 'lucide-react'
+import { Plus, Trash2, Users as UsersIcon, X, Ban, ShieldOff, Search, UserCog } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog } from '@/components/ui/dialog'
@@ -21,14 +21,15 @@ import {
   unblockStudent,
 } from '@/lib/api'
 import { showToast } from '@/components/ui/toast'
-import { useAuth } from '@/lib/auth'
 
 export default function AdminClasses() {
   const qc = useQueryClient()
-  const { user } = useAuth()
   const [createOpen, setCreateOpen] = useState(false)
   const [manageId, setManageId] = useState<number | null>(null)
   const [search, setSearch] = useState('')
+  const [uSearch, setUSearch] = useState('')
+  const [assignId, setAssignId] = useState<number | null>(null)
+  const [assignLecturer, setAssignLecturer] = useState('')
   const [form, setForm] = useState({
     name: '',
     code: '',
@@ -44,8 +45,14 @@ export default function AdminClasses() {
   const { data: classes } = useQuery({ queryKey: ['classes'], queryFn: () => getClasses() })
   const { data: unassigned } = useQuery({ queryKey: ['unassigned'], queryFn: getUnassigned })
   const assignMut = useMutation({
-    mutationFn: (classId: number) => assignSelf(classId, user!.id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['classes'] }); qc.invalidateQueries({ queryKey: ['unassigned'] }); showToast('success','Assigned')},
+    mutationFn: ({ classId, lecturerId }: { classId: number; lecturerId: number }) => assignSelf(classId, lecturerId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['classes'] })
+      qc.invalidateQueries({ queryKey: ['unassigned'] })
+      setAssignId(null)
+      setAssignLecturer('')
+      showToast('success', 'Assigned')
+    },
     onError: (e: Error) => showToast('error', e.message),
   })
   const { data: lecturers } = useQuery({ queryKey: ['users', 'lecturer'], queryFn: () => getUsers('lecturer') })
@@ -62,6 +69,20 @@ export default function AdminClasses() {
         (c.departments ?? []).some((d) => d.toLowerCase().includes(q)),
     )
   }, [classes, search])
+
+  const filteredUnassigned = useMemo(() => {
+    const q = uSearch.trim().toLowerCase()
+    if (!q) return unassigned ?? []
+    return (unassigned ?? []).filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.code.toLowerCase().includes(q) ||
+        (c.department ?? '').toLowerCase().includes(q) ||
+        (c.departments ?? []).some((d) => d.toLowerCase().includes(q)),
+    )
+  }, [unassigned, uSearch])
+
+  const assignTarget = assignId != null ? (classes ?? []).find((c) => c.id === assignId) : null
 
   const createMut = useMutation({
     mutationFn: () =>
@@ -104,11 +125,38 @@ export default function AdminClasses() {
           <Plus className="size-4" /> New class
         </Button>
       </div>
-      {unassigned && unassigned.length>0 && (
+      {unassigned && unassigned.length > 0 && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 p-3">
-          <p className="mb-2 text-sm font-medium text-amber-900">Unassigned — claim as lecturer:</p>
-          <div className="flex flex-wrap gap-2">
-            {unassigned.map(c=> <button key={c.id} onClick={()=>assignMut.mutate(c.id)} className="rounded border border-amber-300 bg-white px-3 py-1 text-sm hover:bg-amber-100"><UserPlus className="mr-1 inline size-3"/>{c.code} — {c.name}</button>)}
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <p className="text-sm font-medium text-amber-900">
+              Unassigned courses ({unassigned.length}) — assign a lecturer:
+            </p>
+            <div className="w-56">
+              <Input
+                icon={<Search className="size-4" />}
+                placeholder="Search unassigned…"
+                value={uSearch}
+                onChange={(e) => setUSearch(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="max-h-56 space-y-1 overflow-y-auto">
+            {filteredUnassigned.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-2 rounded border border-amber-300 bg-white px-3 py-1.5 text-sm">
+                <span className="min-w-0 truncate">
+                  <span className="font-mono-label text-amber-800">{c.code}</span> — {c.name}
+                </span>
+                <button
+                  onClick={() => { setAssignId(c.id); setAssignLecturer('') }}
+                  className="shrink-0 rounded bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-200"
+                >
+                  Assign…
+                </button>
+              </div>
+            ))}
+            {filteredUnassigned.length === 0 && (
+              <p className="py-2 text-center text-xs text-amber-700">No unassigned courses match.</p>
+            )}
           </div>
         </div>
       )}
@@ -138,7 +186,18 @@ export default function AdminClasses() {
               </Td>
               <Td>{c.level ? `${c.level}L` : '—'}</Td>
               <Td>{c.units ?? '—'}</Td>
-              <Td>{lecturers?.find((l) => l.id === c.lecturer_id)?.full_name ?? '—'}</Td>
+              <Td>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate">{lecturers?.find((l) => l.id === c.lecturer_id)?.full_name ?? '—'}</span>
+                  <button
+                    onClick={() => { setAssignId(c.id); setAssignLecturer(c.lecturer_id ? String(c.lecturer_id) : '') }}
+                    className="text-ink-3 hover:text-accent"
+                    aria-label="Assign lecturer"
+                  >
+                    <UserCog className="size-4" />
+                  </button>
+                </div>
+              </Td>
               <Td>{c.room ?? '—'}</Td>
               <Td>
                 <div className="flex justify-end gap-2">
@@ -240,6 +299,36 @@ export default function AdminClasses() {
       </Dialog>
 
       {manageId != null && <EnrollmentManager classId={manageId} onClose={() => setManageId(null)} />}
+
+      {assignId != null && assignTarget && (
+        <Dialog open onClose={() => setAssignId(null)} title={`Assign lecturer — ${assignTarget.code}`}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (assignLecturer) assignMut.mutate({ classId: assignId, lecturerId: Number(assignLecturer) })
+            }}
+            className="space-y-3 pt-2"
+          >
+            <p className="text-sm text-ink-2">{assignTarget.name}</p>
+            <select
+              value={assignLecturer}
+              onChange={(e) => setAssignLecturer(e.target.value)}
+              className="h-10 w-full rounded-[var(--radius-sm)] border border-rule-2 bg-paper px-3 text-sm text-ink"
+              required
+            >
+              <option value="">Select lecturer…</option>
+              {lecturers?.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.full_name}
+                </option>
+              ))}
+            </select>
+            <Button type="submit" className="w-full" loading={assignMut.isPending}>
+              Assign
+            </Button>
+          </form>
+        </Dialog>
+      )}
     </div>
   )
 }

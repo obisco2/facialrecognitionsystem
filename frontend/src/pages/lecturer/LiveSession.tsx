@@ -511,9 +511,6 @@ function playVerifyBeep() {
               >
                 📡 motion
               </button>
-              <span className="font-mono-label text-graphite-ink-2">
-                green dot = in room · grey = walked away
-              </span>
             </div>
             <ul className="max-h-40 space-y-1.5 overflow-y-auto shrink-0">
               {live!.marked.slice().reverse().map((m, i) => {
