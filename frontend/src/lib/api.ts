@@ -27,6 +27,15 @@ export function setTokens(access: string, refresh: string) {
   localStorage.setItem('attendiq.refresh_token', refresh)
 }
 
+let forceLogoutPending = false
+function forceLogout() {
+  if (forceLogoutPending) return
+  forceLogoutPending = true
+  clearTokens()
+  localStorage.removeItem('attendiq.user')
+  window.location.assign('/login')
+}
+
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     ...(opts.headers as Record<string, string> | undefined),
@@ -48,6 +57,7 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (res.status === 401 && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
     const refresh = getRefreshToken()
     if (refresh) {
+      let refreshed = false
       try {
         const r = await fetch(`${BASE}/auth/refresh`, {
           method: 'POST',
@@ -60,11 +70,16 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
           // retry original request with new token
           headers['Authorization'] = `Bearer ${data.access_token}`
           res = await fetch(`${BASE}${path}`, { ...opts, headers })
-        } else {
-          clearTokens()
+          refreshed = true
         }
       } catch {
-        clearTokens()
+        /* fall through to session invalidation */
+      }
+      if (!refreshed) {
+        // Refresh failed — session is dead. Drop the full session state and
+        // force a hard redirect so the UI doesn't stay mounted and flood the
+        // API with 401s (which trips the rate limiter).
+        forceLogout()
       }
     }
   }
